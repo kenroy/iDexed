@@ -61,6 +61,11 @@ typedef struct {
 
 void dexed_get_status(DexedSynth *s, DexedStatus *out);
 
+// Portamento: `time` is the CC-5-style value 0…127 (0 = off); `glissando` snaps the glide to semitone steps.
+void dexed_set_portamento(DexedSynth *s, int time, bool glissando);
+// Scales incoming velocities by 100/127, like a DX7 whose keyboard tops out at 100.
+void dexed_set_normalize_velocity(DexedSynth *s, bool on);
+
 // Changes the sample rate. Only call while no dexed_render() is running (e.g. from AU allocateRenderResources);
 // all voices are silenced.
 void dexed_set_sample_rate(DexedSynth *s, double sampleRate);

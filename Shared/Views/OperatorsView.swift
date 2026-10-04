@@ -25,6 +25,23 @@ struct OperatorCard: View {
     private var tint: Color { isActive ? Theme.operatorColor(op) : Color(white: 0.5) }
     /// A switched-off operator is silent, so it shows no meter or envelope-stage activity.
     private var isActive: Bool { engine.operatorEnabled[op - 1] }
+    @State private var pasteFailed = false
+
+    /// Copy / paste an operator's values or just its envelope (same text format as Dexed, so it works between the two).
+    @ViewBuilder private var operatorActions: some View {
+        Button("Copy Operator", systemImage: "doc.on.doc") {
+            SystemClipboard.set(engine.operatorClipboardText(op - 1))
+        }
+        Button("Paste Operator", systemImage: "doc.on.clipboard") { paste(envelopeOnly: false) }
+        Button("Paste Envelope Only", systemImage: "waveform.path") { paste(envelopeOnly: true) }
+    }
+
+    private func paste(envelopeOnly: Bool) {
+        guard let text = SystemClipboard.text(), engine.pasteOperator(op - 1, from: text, envelopeOnly: envelopeOnly) else {
+            pasteFailed = true
+            return
+        }
+    }
 
     var body: some View {
         @Bindable var engine = engine
@@ -44,6 +61,11 @@ struct OperatorCard: View {
                     .background(Theme.lcdBackground, in: RoundedRectangle(cornerRadius: 5))
                     .accessibilityLabel("Frequency \(p.frequencyDescription(op: op - 1))")
                 Spacer()
+                Menu { operatorActions } label: {
+                    Image(systemName: "ellipsis.circle").font(.title3).foregroundStyle(Theme.dim)
+                }
+                .menuStyle(.button).buttonStyle(.plain)
+                .accessibilityLabel("Operator \(op) actions")
                 Toggle("Enabled", isOn: $engine.operatorEnabled[op - 1])
                     .labelsHidden().toggleStyle(.switch).tint(tint)
                     .accessibilityLabel("Operator \(op) enabled")
@@ -88,6 +110,12 @@ struct OperatorCard: View {
             }
         }
         .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(tint.opacity(isSelected ? 0.8 : 0), lineWidth: 1.5))
+        .contextMenu { operatorActions }
+        .alert("Nothing to paste", isPresented: $pasteFailed) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("The clipboard doesn't contain operator data. Copy an operator first.")
+        }
     }
 
     private func group<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {

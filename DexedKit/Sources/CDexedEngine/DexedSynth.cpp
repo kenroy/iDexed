@@ -36,7 +36,7 @@ constexpr int kMinNoteBlocks = 15;
 
 enum EventType : uint8_t {
     EvNoteOn, EvNoteOff, EvPitchBend, EvCC, EvAftertouch, EvPatch, EvParam, EvPanic,
-    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter
+    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity
 };
 
 struct Event {
@@ -98,6 +98,7 @@ struct DexedSynth {
     bool sustain = false;
     bool monoMode = false;
     bool refreshVoice = false;
+    bool normalizeVelocity = false;
 
     // Published at the end of render() for the UI thread (relaxed atomics; torn reads are harmless).
     std::atomic<uint32_t> pubAmp[6]{};
@@ -195,6 +196,7 @@ struct DexedSynth {
 
     void keydown(int channel, int pitch, int velo) {
         if (velo == 0) { keyup(channel, pitch); return; }
+        if (normalizeVelocity) velo = (int)((float)velo * 0.7874015f);   // 100/127, as Dexed
         pitch += transpose();
         if (pitch < 0 || pitch > 127) return;
 
@@ -367,6 +369,12 @@ struct DexedSynth {
                 break;
             }
             case EvFilter: fx.uiCutoff = e.f1; fx.uiReso = e.f2; break;
+            case EvPortamento:
+                controllers.portamento_cc = e.a;
+                controllers.portamento_enable_cc = e.a > 0;
+                controllers.portamento_gliss_cc = e.b != 0;
+                break;
+            case EvNormalizeVelocity: normalizeVelocity = e.a != 0; break;
         }
     }
 
@@ -502,6 +510,8 @@ void dexed_set_mod(DexedSynth *s, int src, int range, bool p, bool a, bool e) {
 void dexed_set_master_tune(DexedSynth *s, float v) {
     Event e; e.type = EvMasterTune; e.f1 = v; s->push(e);
 }
+void dexed_set_portamento(DexedSynth *s, int time, bool glissando) { post(s, EvPortamento, time, glissando); }
+void dexed_set_normalize_velocity(DexedSynth *s, bool on) { post(s, EvNormalizeVelocity, on); }
 void dexed_set_filter(DexedSynth *s, float cutoff, float resonance) {
     Event e; e.type = EvFilter; e.f1 = cutoff; e.f2 = resonance; s->push(e);
 }

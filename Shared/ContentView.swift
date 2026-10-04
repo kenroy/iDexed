@@ -263,8 +263,10 @@ private struct HeaderView: View {
 
     @ViewBuilder
     private func level(volume: Binding<Float>, tight: Bool = false) -> some View {
-        OutputMeter(level: engine.status.outputLevel)
-            .frame(minWidth: tight ? 30 : 80, maxWidth: tight ? 110 : nil)
+        captioned("LEVEL") {
+            OutputMeter(level: engine.status.outputLevel)
+                .frame(minWidth: tight ? 30 : 80, maxWidth: tight ? 110 : nil)
+        }
         if !tight {
             #if os(iOS)
             if !engine.isHostedPlugin {
@@ -274,9 +276,22 @@ private struct HeaderView: View {
             Image(systemName: "speaker.fill").foregroundStyle(Theme.dim)
             #endif
         }
-        Slider(value: volume, in: 0...1)
-            .frame(minWidth: tight ? 60 : 90, maxWidth: tight ? 120 : compact ? .infinity : 110)
-            .accessibilityLabel("Volume")
+        captioned("VOLUME") {
+            Slider(value: volume, in: 0...1)
+                .frame(minWidth: tight ? 60 : 90, maxWidth: tight ? 120 : compact ? .infinity : 110)
+                .accessibilityLabel("Volume")
+        }
+    }
+
+    /// A control with a small caption underneath, so it is clear what it is.
+    private func captioned<C: View>(_ text: String, @ViewBuilder _ content: () -> C) -> some View {
+        VStack(spacing: 2) {
+            content()
+            Text(text)
+                .font(.system(size: 8, weight: .bold))
+                .tracking(0.6)
+                .foregroundStyle(Theme.dim)
+        }
     }
 }
 

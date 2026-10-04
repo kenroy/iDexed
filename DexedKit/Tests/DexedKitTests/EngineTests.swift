@@ -433,6 +433,91 @@ import AudioToolbox
         static let expected: [UInt64] = [40932685808056956, 3923941283329485767, 6514936974564345330]
     }
 
+    @Suite struct ClipboardAndControlTests {
+        @Test func operatorClipboardUsesDexedsHexFormat() throws {
+            var p = Patch.initVoice
+            p[op: 2, field: .freqCoarse] = 7
+            p[op: 2, field: .outputLevel] = 88
+            let text = OperatorClipboard.encode(p.operatorBytes(2), description: "from test")
+            #expect(text.hasPrefix("63636363"))                    // 21 bytes, lowercase hex, rates 99 99 99 99 first
+            #expect(text.contains("\n; from test"))
+            let bytes = try #require(OperatorClipboard.decode(text))
+            #expect(bytes == p.operatorBytes(2))
+            #expect(OperatorClipboard.decode("not hex at all, definitely") == nil)
+            #expect(OperatorClipboard.decode("0102") == nil)
+        }
+
+        @Test func pastingAnOperatorCopiesEverythingOrJustTheEnvelope() {
+            var source = Patch.initVoice
+            source[op: 0, field: .rate1] = 12
+            source[op: 0, field: .level1] = 34
+            source[op: 0, field: .outputLevel] = 56
+            source[op: 0, field: .freqCoarse] = 9
+            let bytes = source.operatorBytes(0)
+
+            var all = Patch.initVoice
+            all.setOperatorBytes(3, bytes)
+            #expect(all.operatorBytes(3) == bytes)
+
+            var envelope = Patch.initVoice
+            envelope.setOperatorBytes(3, bytes, envelopeOnly: true)
+            #expect(envelope[op: 3, field: .rate1] == 12)
+            #expect(envelope[op: 3, field: .level1] == 34)
+            #expect(envelope[op: 3, field: .outputLevel] == Patch.initVoice[op: 3, field: .outputLevel])   // untouched
+            #expect(envelope[op: 3, field: .freqCoarse] == Patch.initVoice[op: 3, field: .freqCoarse])
+
+            var clamped = Patch.initVoice
+            clamped.setOperatorBytes(1, [UInt8](repeating: 255, count: 21))      // junk must be clamped to valid ranges
+            #expect(clamped[op: 1, field: .rate1] == 99)
+            #expect(clamped[op: 1, field: .leftCurve] == 3)
+            #expect(clamped[op: 1, field: .oscMode] == 1)
+        }
+
+        @Test @MainActor func engineCopyPasteBetweenOperators() {
+            let engine = SynthEngine(hosted: HostedSession())
+            engine.setParameter(Patch.offset(op: 0, .outputLevel), 71)
+            engine.setParameter(Patch.offset(op: 0, .freqCoarse), 5)
+            let text = engine.operatorClipboardText(0)
+            #expect(engine.pasteOperator(4, from: text))
+            #expect(engine.patch[op: 4, field: .outputLevel] == 71)
+            #expect(engine.patch[op: 4, field: .freqCoarse] == 5)
+            #expect(!engine.pasteOperator(4, from: "hello"))
+        }
+
+        @Test func normalizeVelocityMakesFullVelocityQuieter() {
+            func peak(normalize: Bool) -> Float {
+                var voice = Patch.initVoice
+                voice[op: 0, field: .keyVelSens] = 7          // the init voice ignores velocity; make it respond
+                let core = SynthCore(sampleRate: 48000)
+                core.setPatch(voice)
+                core.setNormalizeVelocity(normalize)
+                core.noteOn(69, velocity: 127)
+                _ = core.render(frames: 2400)
+                return core.render(frames: 4800).map(abs).max() ?? 0
+            }
+            let loud = peak(normalize: false), normalized = peak(normalize: true)
+            #expect(normalized < loud, "loud=\(loud) normalized=\(normalized)")
+        }
+
+        @Test func portamentoGlidesFromThePreviousNote() {
+            func earlyCrossings(portamento: Bool) -> Int {
+                let core = SynthCore(sampleRate: 48000)
+                core.setPortamento(time: portamento ? 100 : 0, glissando: false)
+                core.noteOn(69, velocity: 100)
+                _ = core.render(frames: 4800)
+                core.noteOff(69)
+                _ = core.render(frames: 2400)
+                core.noteOn(81, velocity: 100)                  // an octave up: 880 Hz when it arrives
+                let out = core.render(frames: 1920)             // first 40 ms
+                var c = 0
+                for i in 1..<out.count where (out[i - 1] < 0) != (out[i] < 0) { c += 1 }
+                return c
+            }
+            let direct = earlyCrossings(portamento: false), glide = earlyCrossings(portamento: true)
+            #expect(glide < direct - 8, "direct=\(direct) glide=\(glide)")
+        }
+    }
+
     @Suite struct WheelTests {
         func crossingsPerSecond(_ core: SynthCore, note: Int, bend: Int? = nil) -> Double {
             if let bend { core.pitchBend(bend) }
@@ -478,8 +563,10 @@ import AudioToolbox
     @Suite struct ModWheelRoutingTests {
         @Test @MainActor func defaultRoutingMakesTheWheelAudibleOnAVibratoPatch() {
             let engine = SynthEngine(hosted: HostedSession())
-            #expect(engine.modWheelRange == 100)
-            #expect(engine.modWheelPitch)
+            #expect(engine.routing(.wheel) == ControllerRouting(range: 100, pitch: true))
+            #expect(engine.routing(.aftertouch).pitch)
+            #expect(engine.routing(.foot).amp)
+            #expect(engine.routing(.breath).amp)
         }
     }
 }

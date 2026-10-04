@@ -14,6 +14,24 @@ public struct SynthStatus: Equatable, Sendable {
     }
 }
 
+/// How one MIDI controller (mod wheel, foot, breath, aftertouch) drives the sound.
+public struct ControllerRouting: Codable, Equatable, Sendable {
+    public var range: Int          // 0…127: how strongly the controller acts
+    public var pitch: Bool         // vibrato
+    public var amp: Bool           // tremolo
+    public var eg: Bool            // envelope level
+    public init(range: Int, pitch: Bool = false, amp: Bool = false, eg: Bool = false) {
+        self.range = range; self.pitch = pitch; self.amp = amp; self.eg = eg
+    }
+
+    public static let defaults: [ModSource: ControllerRouting] = [
+        .wheel: .init(range: 100, pitch: true),
+        .foot: .init(range: 50, amp: true),
+        .breath: .init(range: 50, amp: true),
+        .aftertouch: .init(range: 50, pitch: true),
+    ]
+}
+
 public enum EngineType: Int, CaseIterable, Identifiable, Sendable {
     case modern = 0, markI = 1, opl = 2
     public var id: Int { rawValue }
@@ -26,10 +44,11 @@ public enum EngineType: Int, CaseIterable, Identifiable, Sendable {
     }
 }
 
-public enum ModSource: Int, CaseIterable, Identifiable, Sendable {
+public enum ModSource: Int, CaseIterable, Identifiable, Sendable, Codable {
     case wheel = 0, foot, breath, aftertouch
     public var id: Int { rawValue }
     public var title: String { ["Mod Wheel", "Foot", "Breath", "Aftertouch"][rawValue] }
+    public var shortTitle: String { ["Wheel", "Foot", "Breath", "AT"][rawValue] }
 }
 
 /// Thin thread-safe wrapper over the C engine. Every call may be made from any thread
@@ -77,6 +96,9 @@ public final class SynthCore: @unchecked Sendable {
         let bytes = error.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }     // up to the C string's terminator
         return String(decoding: bytes, as: UTF8.self)
     }
+    /// Portamento time as a MIDI-style value 0…127 (0 = off). `glissando` steps through semitones instead of sliding.
+    public func setPortamento(time: Int, glissando: Bool) { dexed_set_portamento(synth, Int32(time), glissando) }
+    public func setNormalizeVelocity(_ on: Bool) { dexed_set_normalize_velocity(synth, on) }
     public func setPitchRange(up: Int, down: Int, step: Int) { dexed_set_pitch_range(synth, Int32(up), Int32(down), Int32(step)) }
     public func setMod(_ s: ModSource, range: Int, pitch: Bool, amp: Bool, eg: Bool) {
         dexed_set_mod(synth, Int32(s.rawValue), Int32(range), pitch, amp, eg)

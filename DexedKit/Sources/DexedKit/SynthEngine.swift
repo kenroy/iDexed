@@ -41,23 +41,58 @@ public final class SynthEngine {
         didSet { UserDefaults.standard.set(filterResonance, forKey: "filterResonance"); core.setFilter(cutoff: filterCutoff, resonance: filterResonance); syncToHost() }
     }
 
-    /// What the mod wheel (MIDI CC 1) controls and how strongly. Like Dexed's controller settings: range 0…127 scales the
-    /// wheel, and it can drive vibrato (pitch), tremolo (amp) and/or envelope level (EG). Vibrato/tremolo depth is still
-    /// limited by the voice's own Pitch Mod Sens / Amp Mod Sens.
-    public var modWheelRange: Int = UserDefaults.standard.object(forKey: "modWheelRange") as? Int ?? 100 {
-        didSet { UserDefaults.standard.set(modWheelRange, forKey: "modWheelRange"); applyModWheel() }
+    /// How each MIDI controller drives the sound (like Dexed's controller settings). Vibrato/tremolo depth is still limited
+    /// by the voice's own Pitch Mod Sens / Amp Mod Sens.
+    public var controllerRouting: [ModSource: ControllerRouting] = SynthEngine.loadRouting() {
+        didSet { SynthEngine.saveRouting(controllerRouting); applyControllerSettings() }
     }
-    public var modWheelPitch: Bool = UserDefaults.standard.object(forKey: "modWheelPitch") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(modWheelPitch, forKey: "modWheelPitch"); applyModWheel() }
+
+    /// Pitch-bend range in semitones (up and down), or a fixed step size when `pitchBendStep` is not 0.
+    public var pitchBendUp: Int = UserDefaults.standard.object(forKey: "pitchBendUp") as? Int ?? 3 {
+        didSet { UserDefaults.standard.set(pitchBendUp, forKey: "pitchBendUp"); applyControllerSettings() }
     }
-    public var modWheelAmp: Bool = UserDefaults.standard.object(forKey: "modWheelAmp") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(modWheelAmp, forKey: "modWheelAmp"); applyModWheel() }
+    public var pitchBendDown: Int = UserDefaults.standard.object(forKey: "pitchBendDown") as? Int ?? 3 {
+        didSet { UserDefaults.standard.set(pitchBendDown, forKey: "pitchBendDown"); applyControllerSettings() }
     }
-    public var modWheelEG: Bool = UserDefaults.standard.object(forKey: "modWheelEG") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(modWheelEG, forKey: "modWheelEG"); applyModWheel() }
+    public var pitchBendStep: Int = UserDefaults.standard.object(forKey: "pitchBendStep") as? Int ?? 0 {
+        didSet { UserDefaults.standard.set(pitchBendStep, forKey: "pitchBendStep"); applyControllerSettings() }
     }
-    private func applyModWheel() {
-        core.setMod(.wheel, range: modWheelRange, pitch: modWheelPitch, amp: modWheelAmp, eg: modWheelEG)
+
+    /// Portamento time 0…99 (0 = off) and glissando (glide in semitone steps).
+    public var portamentoTime: Int = UserDefaults.standard.object(forKey: "portamentoTime") as? Int ?? 0 {
+        didSet { UserDefaults.standard.set(portamentoTime, forKey: "portamentoTime"); applyControllerSettings() }
+    }
+    public var glissando: Bool = UserDefaults.standard.object(forKey: "glissando") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(glissando, forKey: "glissando"); applyControllerSettings() }
+    }
+
+    /// Scale incoming velocities by 100/127, like a DX7 keyboard that tops out at 100.
+    public var normalizeVelocity: Bool = UserDefaults.standard.object(forKey: "normalizeVelocity") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(normalizeVelocity, forKey: "normalizeVelocity"); applyControllerSettings() }
+    }
+
+    public func routing(_ source: ModSource) -> ControllerRouting {
+        controllerRouting[source] ?? ControllerRouting.defaults[source] ?? ControllerRouting(range: 0)
+    }
+
+    private func applyControllerSettings() {
+        for source in ModSource.allCases {
+            let r = routing(source)
+            core.setMod(source, range: r.range, pitch: r.pitch, amp: r.amp, eg: r.eg)
+        }
+        core.setPitchRange(up: pitchBendUp, down: pitchBendDown, step: pitchBendStep)
+        core.setPortamento(time: Int((Float(portamentoTime) * 127 / 100).rounded()), glissando: glissando)   // Dexed's 0–99 → 0–127
+        core.setNormalizeVelocity(normalizeVelocity)
+    }
+
+    private static func loadRouting() -> [ModSource: ControllerRouting] {
+        guard let data = UserDefaults.standard.data(forKey: "controllerRouting"),
+              let saved = try? JSONDecoder().decode([ModSource: ControllerRouting].self, from: data) else { return ControllerRouting.defaults }
+        return ControllerRouting.defaults.merging(saved) { _, new in new }
+    }
+
+    private static func saveRouting(_ routing: [ModSource: ControllerRouting]) {
+        if let data = try? JSONEncoder().encode(routing) { UserDefaults.standard.set(data, forKey: "controllerRouting") }
     }
 
     /// Wheel positions for the on-screen controllers (pitch bend centre = 8192).
@@ -69,7 +104,6 @@ public final class SynthEngine {
     private var currentSCL: String?
     private var currentKBM: String?
 
-    public var pitchBendRange = 3 { didSet { core.setPitchRange(up: pitchBendRange, down: pitchBendRange, step: 0) } }
 
     public let core: SynthCore
     private let audio: AVAudioEngine?
@@ -96,7 +130,7 @@ public final class SynthEngine {
         core.setOperatorMask(0x3F)
         core.setMasterTune(masterTune)
         core.setFilter(cutoff: filterCutoff, resonance: filterResonance)
-        applyModWheel()
+        applyControllerSettings()
         restoreTuning()
 
         let core = self.core
@@ -116,7 +150,7 @@ public final class SynthEngine {
         midi = MIDIInput()
         sendsMIDI = false
         playsLocalSound = true
-        applyModWheel()
+        applyControllerSettings()
         applyFromHost()
         session.onExternalChange = { [weak self] in
             MainActor.assumeIsolated { self?.applyFromHost() }
@@ -398,6 +432,23 @@ public final class SynthEngine {
         guard let scl = d.string(forKey: "tuningSCL"), core.setTuning(scl: scl, kbm: d.string(forKey: "tuningKBM")) == nil else { return }
         tuningName = d.string(forKey: "tuningName") ?? "Custom"
         currentSCL = scl; currentKBM = d.string(forKey: "tuningKBM")
+    }
+
+    // MARK: Operator copy / paste
+
+    /// The operator's values as Dexed-compatible clipboard text.
+    public func operatorClipboardText(_ op: Int) -> String {
+        OperatorClipboard.encode(patch.operatorBytes(op), description: "iDexed OP\(op + 1) of \(patch.name)")
+    }
+
+    /// Pastes clipboard text onto an operator (all values, or just the envelope). Returns false if it isn't operator data.
+    @discardableResult
+    public func pasteOperator(_ op: Int, from text: String, envelopeOnly: Bool = false) -> Bool {
+        guard let bytes = OperatorClipboard.decode(text) else { return false }
+        var p = patch
+        p.setOperatorBytes(op, bytes, envelopeOnly: envelopeOnly)
+        load(patch: p)
+        return true
     }
 
     /// Stores the edited voice into the current bank slot.
