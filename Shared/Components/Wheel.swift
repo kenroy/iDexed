@@ -36,40 +36,68 @@ struct Wheel: View {
     private var track: some View {
         GeometryReader { geo in
             let h = geo.size.height
-            let thumbH: CGFloat = 26
-            let travel = max(1, h - thumbH)
+            let w = geo.size.width
+            let capH: CGFloat = 36
+            let grooveW: CGFloat = 12
+            let travel = max(1, h - capH)
             ZStack(alignment: .top) {
-                RoundedRectangle(cornerRadius: 8).fill(Color.black.opacity(0.55))
+                // The plate the groove is cut into.
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color(white: 0.095))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.10), .white.opacity(0.03)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
 
-                // Groove running the full length, with tick marks along it.
-                Capsule()
-                    .fill(.white.opacity(0.22))
-                    .frame(width: 3)
-                    .padding(.vertical, thumbH / 2)
-                    .frame(maxHeight: .infinity)
-                ForEach([0.0, 0.25, 0.5, 0.75, 1.0], id: \.self) { f in
-                    let isCenter = springsToCenter && f == 0.5
-                    Rectangle()
-                        .fill(.white.opacity(isCenter ? 0.55 : 0.25))
-                        .frame(width: isCenter ? 18 : 10, height: 1)
-                        .offset(y: thumbH / 2 + CGFloat(1 - f) * travel - 0.5)
+                // Centre notch on either side of the groove (pitch only), so the rest position is easy to find.
+                if springsToCenter {
+                    HStack(spacing: grooveW + 12) {
+                        Rectangle().fill(.white.opacity(0.30)).frame(width: 5, height: 1.5)
+                        Rectangle().fill(.white.opacity(0.30)).frame(width: 5, height: 1.5)
+                    }
+                    .offset(y: capH / 2 + travel / 2 - 0.75)
                 }
 
-                RoundedRectangle(cornerRadius: 6)
-                    .fill(LinearGradient(colors: [Color(white: 0.55), Color(white: 0.24)], startPoint: .top, endPoint: .bottom))
-                    .overlay(alignment: .center) {
-                        Rectangle().fill(.black.opacity(0.35)).frame(height: 1)      // grip line
+                // The groove: a recessed slot, shadowed along its top-left lip and catching light along the bottom-right.
+                RoundedRectangle(cornerRadius: grooveW / 2, style: .continuous)
+                    .fill(LinearGradient(colors: [Color.black, Color(white: 0.02)], startPoint: .top, endPoint: .bottom))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: grooveW / 2, style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [.black.opacity(0.95), .white.opacity(0.20)],
+                                                         startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+                    )
+                    .overlay(alignment: .top) {      // inner shadow at the top of the slot
+                        LinearGradient(colors: [.black.opacity(0.9), .clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 22)
+                            .clipShape(RoundedRectangle(cornerRadius: grooveW / 2, style: .continuous))
                     }
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Theme.accent.opacity(0.7), lineWidth: 1))
-                    .frame(height: thumbH)
-                    .padding(.horizontal, 2)
+                    .frame(width: grooveW)
+                    .padding(.vertical, capH / 2 - 4)
+                    .frame(maxHeight: .infinity)
+
+                // The raised slider cap sitting in the groove.
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: 0.68), Color(white: 0.36)], startPoint: .top, endPoint: .bottom))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .black.opacity(0.45)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                    )
+                    .overlay {                       // grip ridges with a teal indicator line in the middle
+                        VStack(spacing: 3) {
+                            ForEach(0..<2, id: \.self) { _ in ridge }
+                            Capsule().fill(Theme.accent).frame(width: w - 14, height: 3)
+                                .shadow(color: Theme.accent.opacity(0.8), radius: 3)
+                            ForEach(0..<2, id: \.self) { _ in ridge }
+                        }
+                    }
+                    .frame(width: w - 4, height: capH)
+                    .shadow(color: .black.opacity(0.65), radius: 3, y: 2)
                     .offset(y: (1 - CGFloat(value)) * travel)
             }
+            .frame(width: w, height: h)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
-                        let v = 1 - Double((g.location.y - thumbH / 2) / travel)
+                        let v = 1 - Double((g.location.y - capH / 2) / travel)
                         onChange(min(1, max(0, v)))
                     }
                     .onEnded { _ in
@@ -77,5 +105,13 @@ struct Wheel: View {
                     }
             )
         }
+    }
+
+    private var ridge: some View {
+        VStack(spacing: 0) {
+            Rectangle().fill(.black.opacity(0.35)).frame(height: 1)
+            Rectangle().fill(.white.opacity(0.28)).frame(height: 1)
+        }
+        .frame(width: 18)
     }
 }
