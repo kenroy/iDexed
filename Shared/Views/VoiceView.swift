@@ -11,12 +11,12 @@ struct VoiceView: View {
     }
 
     var body: some View {
-        let columns = [GridItem(.adaptive(minimum: 340), spacing: 12, alignment: .top)]
-        LazyVGrid(columns: columns, spacing: 12) {
+        // Order matters: the tall Global card goes second so the three columns come out roughly even on iPad/Mac.
+        MasonryLayout(minColumnWidth: 340, spacing: 12) {
             algorithmPanel
+            globalPanel
             pitchEGPanel
             lfoPanel
-            globalPanel
         }
     }
 
