@@ -108,7 +108,7 @@ int32_t Lfo::getdelay() {
     if (d > ~0u) {
         return 1 << 24;
     }
-    delaystate_ = d;
+    delaystate_ = (uint32_t)d;   // d <= UINT32_MAX is guaranteed by the check above
     if (d < (1U << 31)) {
         return 0;
     } else {

@@ -50,7 +50,7 @@ int32_t Sin::lookup(int32_t phase) {
   int dy = sintab[phase_int];
   int y0 = sintab[phase_int + 1];
 
-  return y0 + (((int64_t)dy * (int64_t)lowbits) >> SHIFT);
+  return (int32_t)(y0 + (((int64_t)dy * (int64_t)lowbits) >> SHIFT));
 #else
   int phase_int = (phase >> SHIFT) & (SIN_N_SAMPLES - 1);
   int y0 = sintab[phase_int];

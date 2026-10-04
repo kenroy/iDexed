@@ -42,8 +42,8 @@ void Sin::init() {
     sintab[i] = (v + 32) >> 6;
     sintab[i + SIN_N_SAMPLES / 2] = -((v + 32) >> 6);
 #endif
-    int32_t t = ((int64_t)u * (int64_t)s + (int64_t)v * (int64_t)c + R) >> 30;
-    u = ((int64_t)u * (int64_t)c - (int64_t)v * (int64_t)s + R) >> 30;
+    int32_t t = (int32_t)(((int64_t)u * (int64_t)s + (int64_t)v * (int64_t)c + R) >> 30);
+    u = (int32_t)(((int64_t)u * (int64_t)c - (int64_t)v * (int64_t)s + R) >> 30);
     v = t;
   }
 #ifdef SIN_DELTA
@@ -111,7 +111,7 @@ int32_t Sin::compute(int32_t phase) {
 
 int32_t Sin::compute(int32_t phase) {
   int32_t x = (phase & ((1 << 23) - 1)) - (1 << 22);
-  int32_t x2 = ((int64_t)x * (int64_t)x) >> 16;
+  int32_t x2 = (int32_t)(((int64_t)x * (int64_t)x) >> 16);
   int32_t y = (((((((((((((int64_t)C8_8
     * (int64_t)x2) >> 32) + C8_6)
     * (int64_t)x2) >> 32) + C8_4)
@@ -130,13 +130,13 @@ int32_t Sin::compute(int32_t phase) {
 #define C10_10 -421101352
 int32_t Sin::compute10(int32_t phase) {
   int32_t x = (phase & ((1 << 29) - 1)) - (1 << 28);
-  int32_t x2 = ((int64_t)x * (int64_t)x) >> 26;
-  int32_t y = ((((((((((((((((int64_t)C10_10
+  int32_t x2 = (int32_t)(((int64_t)x * (int64_t)x) >> 26);
+  int32_t y = (int32_t)(((((((((((((((((int64_t)C10_10
     * (int64_t)x2) >> 34) + C10_8)
     * (int64_t)x2) >> 34) + C10_6)
     * (int64_t)x2) >> 34) + C10_4)
     * (int64_t)x2) >> 32) + C10_2)
-    * (int64_t)x2) >> 30) + C10_0);
+    * (int64_t)x2) >> 30) + C10_0));
   y ^= -((phase >> 29) & 1);
   return y;
 }

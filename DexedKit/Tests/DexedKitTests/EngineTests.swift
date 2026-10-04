@@ -389,6 +389,50 @@ import AudioToolbox
         }
     }
 
+    /// Fingerprint of the engine's exact output. Guards the fixed-point maths: refactors (e.g. making integer
+    /// conversions explicit to silence compiler warnings) must not change a single sample.
+    @Suite struct BitExactnessTests {
+        static func fingerprint(_ engine: EngineType) -> UInt64 {
+            var p = Patch.initVoice
+            p.algorithm = 4
+            p.feedback = 6
+            p[137] = 40; p[139] = 30; p[140] = 20; p[143] = 4          // LFO speed, pitch/amp depth, pitch sens
+            for op in 0..<6 {
+                p[op: op, field: .outputLevel] = 85 - op * 4
+                p[op: op, field: .freqCoarse] = 1 + op % 3
+                p[op: op, field: .freqFine] = op * 7
+                p[op: op, field: .detune] = 5 + op
+                p[op: op, field: .ampModSens] = op % 4
+                p[op: op, field: .keyVelSens] = op % 8
+                p[op: op, field: .rate1] = 70 + op * 3
+                p[op: op, field: .level2] = 80
+            }
+            p[op: 1, field: .oscMode] = 1                                  // one fixed-frequency operator
+
+            let core = SynthCore(sampleRate: 48000)
+            core.setEngine(engine)
+            core.setPatch(p)
+            core.controlChange(1, 90)
+            var hash: UInt64 = 0xcbf29ce484222325
+            for (note, velocity) in [(48, 90), (55, 70), (64, 110), (88, 60)] { core.noteOn(note, velocity: velocity) }
+            for block in 0..<40 {
+                if block == 20 { core.pitchBend(12000); core.noteOff(48) }
+                for sample in core.render(frames: 512) {
+                    hash = (hash ^ UInt64(sample.bitPattern)) &* 0x100000001b3
+                }
+            }
+            return hash
+        }
+
+        @Test func engineOutputMatchesRecordedFingerprint() {
+            let got = EngineType.allCases.map { Self.fingerprint($0) }
+            print("FINGERPRINTS", got)
+            #expect(got == Self.expected, "fingerprints changed: \(got)")
+        }
+
+        static let expected: [UInt64] = [40932685808056956, 3923941283329485767, 6514936974564345330]
+    }
+
     @Suite struct WheelTests {
         func crossingsPerSecond(_ core: SynthCore, note: Int, bend: Int? = nil) -> Double {
             if let bend { core.pitchBend(bend) }

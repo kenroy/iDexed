@@ -49,7 +49,7 @@ int32_t Freqlut::lookup(int32_t logfreq) {
   int32_t y0 = lut[ix];
   int32_t y1 = lut[ix + 1];
   int lowbits = logfreq & ((1 << SAMPLE_SHIFT) - 1);
-  int32_t y = y0 + ((((int64_t)(y1 - y0) * (int64_t)lowbits)) >> SAMPLE_SHIFT);
+  int32_t y = (int32_t)(y0 + ((((int64_t)(y1 - y0) * (int64_t)lowbits)) >> SAMPLE_SHIFT));
   int hibits = logfreq >> 24;
   return y >> (MAX_LOGFREQ_INT - hibits);
 }

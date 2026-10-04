@@ -60,7 +60,7 @@ void FmOpKernel::compute(int32_t *output, const int32_t *input,
       for (int i = 0; i < N; i++) {
         gain += dgain;
         int32_t y = Sin::lookup(phase + input[i]);
-        int32_t y1 = ((int64_t)y * (int64_t)gain) >> 24;
+        int32_t y1 = (int32_t)(((int64_t)y * (int64_t)gain) >> 24);
         output[i] += y1;
         phase += freq;
       }
@@ -68,7 +68,7 @@ void FmOpKernel::compute(int32_t *output, const int32_t *input,
       for (int i = 0; i < N; i++) {
         gain += dgain;
         int32_t y = Sin::lookup(phase + input[i]);
-        int32_t y1 = ((int64_t)y * (int64_t)gain) >> 24;
+        int32_t y1 = (int32_t)(((int64_t)y * (int64_t)gain) >> 24);
         output[i] = y1;
         phase += freq;
       }
@@ -91,7 +91,7 @@ void FmOpKernel::compute_pure(int32_t *output, int32_t phase0, int32_t freq,
       for (int i = 0; i < N; i++) {
         gain += dgain;
         int32_t y = Sin::lookup(phase);
-        int32_t y1 = ((int64_t)y * (int64_t)gain) >> 24;
+        int32_t y1 = (int32_t)(((int64_t)y * (int64_t)gain) >> 24);
         output[i] += y1;
         phase += freq;
       }
@@ -99,7 +99,7 @@ void FmOpKernel::compute_pure(int32_t *output, int32_t phase0, int32_t freq,
       for (int i = 0; i < N; i++) {
         gain += dgain;
         int32_t y = Sin::lookup(phase);
-        int32_t y1 = ((int64_t)y * (int64_t)gain) >> 24;          
+        int32_t y1 = (int32_t)(((int64_t)y * (int64_t)gain) >> 24);          
         output[i] = y1;
         phase += freq;
       }
@@ -124,7 +124,7 @@ void FmOpKernel::compute_fb(int32_t *output, int32_t phase0, int32_t freq,
       int32_t scaled_fb = (y0 + y) >> (fb_shift + 1);
       y0 = y;
       y = Sin::lookup(phase + scaled_fb);
-      y = ((int64_t)y * (int64_t)gain) >> 24;
+      y = (int32_t)(((int64_t)y * (int64_t)gain) >> 24);
       output[i] += y;
       phase += freq;
     }
@@ -134,7 +134,7 @@ void FmOpKernel::compute_fb(int32_t *output, int32_t phase0, int32_t freq,
       int32_t scaled_fb = (y0 + y) >> (fb_shift + 1);
       y0 = y;
       y = Sin::lookup(phase + scaled_fb);
-      y = ((int64_t)y * (int64_t)gain) >> 24;
+      y = (int32_t)(((int64_t)y * (int64_t)gain) >> 24);
       output[i] = y;
       phase += freq;
     }

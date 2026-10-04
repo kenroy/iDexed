@@ -73,7 +73,9 @@ public final class SynthCore: @unchecked Sendable {
     public func setTuning(scl: String?, kbm: String? = nil) -> String? {
         var error = [CChar](repeating: 0, count: 256)
         let ok = dexed_set_tuning(synth, scl, kbm, &error, 256)
-        return ok ? nil : String(cString: error)
+        guard !ok else { return nil }
+        let bytes = error.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }     // up to the C string's terminator
+        return String(decoding: bytes, as: UTF8.self)
     }
     public func setPitchRange(up: Int, down: Int, step: Int) { dexed_set_pitch_range(synth, Int32(up), Int32(down), Int32(step)) }
     public func setMod(_ s: ModSource, range: Int, pitch: Bool, amp: Bool, eg: Bool) {
