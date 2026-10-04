@@ -2,6 +2,18 @@
 
 A native SwiftUI port of [Dexed](https://github.com/asb2m10/dexed), the open-source DX7 FM synthesizer, for macOS, iOS and iPadOS.
 
+## Screenshots
+
+| iPad: Voice | iPad: Operators |
+| --- | --- |
+| ![Voice tab on iPad Pro 13-inch: algorithm, global, pitch envelope and LFO cards](docs/screenshots/ipad-voice.png) | ![Operators tab on iPad Pro 13-inch: three operator cards with envelopes, meters and frequency readouts](docs/screenshots/ipad-operators.png) |
+
+<p align="center">
+  <img src="docs/screenshots/iphone-bank.png" alt="Bank tab on iPhone 16 Pro Max with the on-screen keyboard and pitch and mod wheels" width="320">
+</p>
+
+## Project layout
+
 - `DexedKit/` – Swift package: Dexed's msfa C++ engine (`CDexedEngine`, JUCE-free voice manager with a C API, output filter, Scala tuning) plus Swift patch/SysEx/audio/MIDI code and the AUv3 `DexedAudioUnit`.
 - `iDexed/` – the app entry point and assets.
 - `Shared/` – the SwiftUI editor, compiled into both the app and the plug-in.
