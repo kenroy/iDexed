@@ -1,0 +1,9 @@
+# macOS / Xcode / SwiftPM build products and per-user state
+.DS_Store
+build/
+DerivedData/
+.build/
+.swiftpm/
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/

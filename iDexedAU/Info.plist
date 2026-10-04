@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>AudioComponents</key>
+			<array>
+				<dict>
+					<key>name</key>
+					<string>kenroy: iDexed</string>
+					<key>description</key>
+					<string>DX7-style FM synthesizer (port of Dexed)</string>
+					<key>manufacturer</key>
+					<string>Kenr</string>
+					<key>type</key>
+					<string>aumu</string>
+					<key>subtype</key>
+					<string>iDxd</string>
+					<key>version</key>
+					<integer>1</integer>
+					<key>sandboxSafe</key>
+					<true/>
+					<key>tags</key>
+					<array>
+						<string>Synthesizer</string>
+					</array>
+				</dict>
+			</array>
+		</dict>
+		<key>NSExtensionPointIdentifier</key>
+		<string>com.apple.AudioUnit-UI</string>
+		<key>NSExtensionPrincipalClass</key>
+		<string>$(PRODUCT_MODULE_NAME).AudioUnitViewController</string>
+	</dict>
+</dict>
+</plist>
