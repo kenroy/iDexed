@@ -37,6 +37,11 @@ void dexed_pitch_bend(DexedSynth *s, int value14bit);
 // Without MPE every pitch bend is global. `range` is the per-note bend range in semitones.
 void dexed_pitch_bend_channel(DexedSynth *s, int channel, int value14bit);
 void dexed_set_mpe(DexedSynth *s, bool enabled, int range);
+// MIDI channel filter: 0 listens on every channel (omni), 1…16 only on that channel. MPE overrides it.
+void dexed_set_midi_channel(DexedSynth *s, int channel);
+bool dexed_accepts_channel(DexedSynth *s, int channel);
+// With a custom tuning, make whole-octave transposes shift by whole scale periods (Dexed's "Transpose 12 as scale").
+void dexed_set_transpose_as_scale(DexedSynth *s, bool on);
 void dexed_control_change(DexedSynth *s, int cc, int value);
 void dexed_aftertouch(DexedSynth *s, int value);
 void dexed_panic(DexedSynth *s);

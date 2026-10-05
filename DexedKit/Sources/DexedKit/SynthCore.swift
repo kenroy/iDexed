@@ -79,6 +79,10 @@ public final class SynthCore: @unchecked Sendable {
     /// Pitch bend as received on a MIDI channel (1…16). With MPE on, channels 2…16 bend only their own note.
     public func pitchBend(_ v14: Int, channel: Int) { dexed_pitch_bend_channel(synth, Int32(channel), Int32(v14)) }
     /// MPE on/off and the per-note bend range in semitones (Dexed's default is 24).
+    /// 0 = omni, 1…16 = listen only on that channel.
+    public func setMIDIChannel(_ channel: Int) { dexed_set_midi_channel(synth, Int32(channel)) }
+    public func acceptsChannel(_ channel: Int) -> Bool { dexed_accepts_channel(synth, Int32(channel)) }
+    public func setTransposeAsScale(_ on: Bool) { dexed_set_transpose_as_scale(synth, on) }
     public func setMPE(enabled: Bool, range: Int) { dexed_set_mpe(synth, enabled, Int32(range)) }
     public func controlChange(_ cc: Int, _ v: Int) { dexed_control_change(synth, Int32(cc), Int32(v)) }
     public func aftertouch(_ v: Int) { dexed_aftertouch(synth, Int32(v)) }
@@ -147,6 +151,7 @@ public final class SynthCore: @unchecked Sendable {
     /// Dispatches a raw 3-byte MIDI 1.0 channel message.
     public func handleMIDI(status: UInt8, data1: UInt8, data2: UInt8) {
         let ch = Int(status & 0x0F) + 1
+        guard acceptsChannel(ch) else { return }
         switch status & 0xF0 {
         case 0x80: noteOff(Int(data1), channel: ch)
         case 0x90: data2 == 0 ? noteOff(Int(data1), channel: ch) : noteOn(Int(data1), velocity: Int(data2), channel: ch)

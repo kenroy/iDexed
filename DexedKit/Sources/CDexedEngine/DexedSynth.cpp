@@ -36,7 +36,7 @@ constexpr int kMinNoteBlocks = 15;
 
 enum EventType : uint8_t {
     EvNoteOn, EvNoteOff, EvPitchBend, EvCC, EvAftertouch, EvPatch, EvParam, EvPanic,
-    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE
+    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE, EvTransposeAsScale
 };
 
 struct Event {
@@ -108,6 +108,9 @@ struct DexedSynth {
     std::atomic<float> pubLevel{0};
     std::atomic<uint64_t> pubNotes[2]{};
     std::atomic<float> outputGain{1.0f};
+    std::atomic<int> midiChannel{0};          // 0 = omni, otherwise 1…16
+    std::atomic<bool> mpeAcceptsAll{false};   // MPE controllers use a channel per note, so the filter must stand aside
+    bool transposeAsScale = true;             // whole-octave transposes shift by whole scale periods on a custom tuning
     float vu = 0;
     double sampleRate = 48000;
 
@@ -175,7 +178,7 @@ struct DexedSynth {
 
     int transpose() const {
         // With a custom tuning, whole-octave transposes shift by whole scale periods (as in Dexed).
-        if (tuning->is_standard_tuning() || data[144] % 12 != 0) return data[144] - 24;
+        if (!transposeAsScale || tuning->is_standard_tuning() || data[144] % 12 != 0) return data[144] - 24;
         return (data[144] - 24) / 12 * tuning->scale_length();
     }
 
@@ -397,6 +400,7 @@ struct DexedSynth {
                 controllers.portamento_enable_cc = e.a > 0;
                 controllers.portamento_gliss_cc = e.b != 0;
                 break;
+            case EvTransposeAsScale: transposeAsScale = e.a != 0; break;
             case EvNormalizeVelocity: normalizeVelocity = e.a != 0; break;
         }
     }
@@ -523,7 +527,13 @@ void dexed_note_on(DexedSynth *s, int ch, int note, int vel) { post(s, EvNoteOn,
 void dexed_note_off(DexedSynth *s, int ch, int note) { post(s, EvNoteOff, ch, note); }
 void dexed_pitch_bend(DexedSynth *s, int v) { post(s, EvPitchBend, v); }
 void dexed_pitch_bend_channel(DexedSynth *s, int channel, int v) { post(s, EvChannelPitchBend, channel, v); }
-void dexed_set_mpe(DexedSynth *s, bool on, int range) { post(s, EvMPE, on, range); }
+void dexed_set_mpe(DexedSynth *s, bool on, int range) { s->mpeAcceptsAll.store(on); post(s, EvMPE, on, range); }
+void dexed_set_midi_channel(DexedSynth *s, int channel) { s->midiChannel.store(channel); }
+bool dexed_accepts_channel(DexedSynth *s, int channel) {
+    int wanted = s->midiChannel.load();
+    return wanted == 0 || channel == wanted || s->mpeAcceptsAll.load();
+}
+void dexed_set_transpose_as_scale(DexedSynth *s, bool on) { post(s, EvTransposeAsScale, on); }
 void dexed_control_change(DexedSynth *s, int cc, int v) { post(s, EvCC, cc, v); }
 void dexed_aftertouch(DexedSynth *s, int v) { post(s, EvAftertouch, v); }
 void dexed_panic(DexedSynth *s) { post(s, EvPanic); }

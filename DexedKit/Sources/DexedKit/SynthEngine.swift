@@ -81,6 +81,15 @@ public final class SynthEngine {
         didSet { UserDefaults.standard.set(mpeBendRange, forKey: "mpeBendRange"); applyControllerSettings() }
     }
 
+    /// 0 = Omni (every channel), 1…16 = listen on that channel only. MPE ignores it, since MPE uses a channel per note.
+    public var midiChannel: Int = UserDefaults.standard.object(forKey: "midiChannel") as? Int ?? 0 {
+        didSet { UserDefaults.standard.set(midiChannel, forKey: "midiChannel"); applyControllerSettings() }
+    }
+    /// On a custom tuning, make transposes of a whole octave move by whole scale periods (Dexed's default).
+    public var transposeAsScale: Bool = UserDefaults.standard.object(forKey: "transposeAsScale") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(transposeAsScale, forKey: "transposeAsScale"); applyControllerSettings() }
+    }
+
     public func routing(_ source: ModSource) -> ControllerRouting {
         controllerRouting[source] ?? ControllerRouting.defaults[source] ?? ControllerRouting(range: 0)
     }
@@ -94,6 +103,8 @@ public final class SynthEngine {
         core.setPortamento(time: Int((Float(portamentoTime) * 127 / 100).rounded()), glissando: glissando)   // Dexed's 0–99 → 0–127
         core.setNormalizeVelocity(normalizeVelocity)
         core.setMPE(enabled: mpeEnabled, range: mpeBendRange)
+        core.setMIDIChannel(midiChannel)
+        core.setTransposeAsScale(transposeAsScale)
     }
 
     private static func loadRouting() -> [ModSource: ControllerRouting] {
@@ -287,6 +298,7 @@ public final class SynthEngine {
         let core = self.core
         midi.onMessage = { [weak self] status, d1, d2 in
             core.handleMIDI(status: status, data1: d1, data2: d2)
+            guard core.acceptsChannel(Int(status & 0x0F) + 1) else { return }     // program change and CC mapping obey the filter too
             if status & 0xF0 == 0xC0 {
                 Task { @MainActor in self?.selectProgram(Int(d1), sendMIDI: false) }
             } else if status & 0xF0 == 0xB0 {

@@ -25,7 +25,7 @@ struct iDexedApp: App {
             #endif
         }
         #if os(macOS)
-        .defaultSize(width: 1080, height: 860)
+        .defaultSize(width: 1160, height: 920)     // fits all cards in three columns, with the keyboard, without scrolling
         .commands { ShortcutCommands() }
         #endif
     }

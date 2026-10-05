@@ -749,6 +749,67 @@ import AudioToolbox
         }
     }
 
+    @Suite struct ChannelFilterTests {
+        func level(_ core: SynthCore) -> Float {
+            let out = core.render(frames: 4800)
+            return out.map { abs($0) }.max() ?? 0
+        }
+
+        @Test func omniAcceptsEveryChannel() {
+            let core = SynthCore(sampleRate: 48000)
+            core.handleMIDI(status: 0x95, data1: 69, data2: 100)      // note on, channel 6
+            #expect(level(core) > 0.01)
+        }
+
+        @Test func filterIgnoresOtherChannels() {
+            let core = SynthCore(sampleRate: 48000)
+            core.setMIDIChannel(3)
+            core.handleMIDI(status: 0x95, data1: 69, data2: 100)      // channel 6: ignored
+            #expect(level(core) < 0.0001)
+            core.handleMIDI(status: 0x92, data1: 69, data2: 100)      // channel 3: plays
+            #expect(level(core) > 0.01)
+        }
+
+        @Test func mpeStandsAsideFromTheFilter() {
+            let core = SynthCore(sampleRate: 48000)
+            core.setMIDIChannel(1)
+            core.setMPE(enabled: true, range: 24)
+            core.handleMIDI(status: 0x95, data1: 69, data2: 100)
+            #expect(level(core) > 0.01)
+        }
+    }
+
+    @Suite struct TransposeAsScaleTests {
+        func hz(_ core: SynthCore, note: Int) -> Double {
+            core.noteOn(note, velocity: 100)
+            _ = core.render(frames: 2400)
+            let out = core.render(frames: 48000)
+            var c = 0
+            for i in 1..<out.count where (out[i - 1] < 0) != (out[i] < 0) { c += 1 }
+            return Double(c) / 2
+        }
+
+        // A 7-note scale repeating at the octave: one scale period is 7 keys, not 12.
+        let scl = "! seven\nseven\n 7\n" + (1...6).map { "\(Double($0) * 1200 / 7)" }.joined(separator: "\n") + "\n 2/1\n"
+
+        func transposedPitch(asScale: Bool) -> Double {
+            let core = SynthCore(sampleRate: 48000)
+            #expect(core.setTuning(scl: scl) == nil)
+            core.setTransposeAsScale(asScale)
+            var p = Patch.initVoice
+            p[144] = 36                      // +12 semitones
+            core.setPatch(p)
+            _ = core.render(frames: 64)
+            return hz(core, note: 60)
+        }
+
+        @Test func optionChangesWhatAnOctaveOfTransposeMeans() {
+            let on = transposedPitch(asScale: true)
+            let off = transposedPitch(asScale: false)
+            #expect(abs(on - off) > 5, "on=\(on) off=\(off)")
+        }
+    }
+
     @Suite struct MPETests {
         func hz(_ core: SynthCore) -> Double {
             _ = core.render(frames: 2400)

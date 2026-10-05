@@ -254,6 +254,12 @@ private struct HeaderView: View {
                 Button("Standard Tuning (12-TET)") { engine.resetTuning() }
                 Button("Load Scala Scale (.scl)…") { importKind = .scale; importing = true }
                 Button("Add Keyboard Mapping (.kbm)…") { importKind = .mapping; importing = true }
+                Toggle("Transpose 12 as Scale", isOn: Binding(get: { engine.transposeAsScale }, set: { engine.transposeAsScale = $0 }))
+                Text("On a custom tuning, an octave of transpose moves by one whole scale period.")
+            }
+            Picker("MIDI Channel", systemImage: "pianokeys", selection: Binding(get: { engine.midiChannel }, set: { engine.midiChannel = $0 })) {
+                Text("Omni (all channels)").tag(0)
+                ForEach(1...16, id: \.self) { Text("Channel \($0)").tag($0) }
             }
             Divider()
             if !engine.isHostedPlugin {
