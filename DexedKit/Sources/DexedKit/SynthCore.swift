@@ -98,6 +98,8 @@ public final class SynthCore: @unchecked Sendable {
     }
     /// Portamento time as a MIDI-style value 0…127 (0 = off). `glissando` steps through semitones instead of sliding.
     public func setPortamento(time: Int, glissando: Bool) { dexed_set_portamento(synth, Int32(time), glissando) }
+    /// Output gain applied after the meters (1 = unity). Safe to call from any thread.
+    public func setOutputGain(_ gain: Float) { dexed_set_output_gain(synth, gain) }
     public func setNormalizeVelocity(_ on: Bool) { dexed_set_normalize_velocity(synth, on) }
     public func setPitchRange(up: Int, down: Int, step: Int) { dexed_set_pitch_range(synth, Int32(up), Int32(down), Int32(step)) }
     public func setMod(_ s: ModSource, range: Int, pitch: Bool, amp: Bool, eg: Bool) {

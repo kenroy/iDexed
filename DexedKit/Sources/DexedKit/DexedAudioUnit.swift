@@ -102,7 +102,6 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
 
     public override var internalRenderBlock: AUInternalRenderBlock {
         let core = session.core
-        let volume = session.volumeBox
         let scratch = self.scratch
         let session = self.session
 
@@ -162,13 +161,11 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
             }
             renderUpTo(frames)
 
-            // Mono → every output channel, with the plug-in volume.
-            let gain = volume.value
-            for (i, b) in buffers.enumerated() {
+            // Mono → every output channel. The plug-in's Volume is applied inside the engine (atomically).
+            for b in buffers {
                 guard let dst = b.mData?.assumingMemoryBound(to: Float.self) else { continue }
                 let n = min(frames, Int(b.mDataByteSize) / MemoryLayout<Float>.size)
-                for f in 0..<n { dst[f] = scratch.mono[f] * gain }
-                _ = i
+                dst.update(from: scratch.mono, count: n)
             }
             return noErr
         }

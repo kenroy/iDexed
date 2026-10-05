@@ -106,6 +106,7 @@ struct DexedSynth {
     std::atomic<int> pubPitchStage{-1};
     std::atomic<float> pubLevel{0};
     std::atomic<uint64_t> pubNotes[2]{};
+    std::atomic<float> outputGain{1.0f};
     float vu = 0;
     double sampleRate = 48000;
 
@@ -440,6 +441,8 @@ struct DexedSynth {
         }
         fx.process(out, frames);
         publishStatus(out, frames);
+        const float gain = outputGain.load(std::memory_order_relaxed);
+        if (gain != 1.0f) for (int k = 0; k < frames; k++) out[k] *= gain;
     }
 
     void publishStatus(const float *out, int frames) {
@@ -511,6 +514,7 @@ void dexed_set_master_tune(DexedSynth *s, float v) {
     Event e; e.type = EvMasterTune; e.f1 = v; s->push(e);
 }
 void dexed_set_portamento(DexedSynth *s, int time, bool glissando) { post(s, EvPortamento, time, glissando); }
+void dexed_set_output_gain(DexedSynth *s, float gain) { s->outputGain.store(gain, std::memory_order_relaxed); }
 void dexed_set_normalize_velocity(DexedSynth *s, bool on) { post(s, EvNormalizeVelocity, on); }
 void dexed_set_filter(DexedSynth *s, float cutoff, float resonance) {
     Event e; e.type = EvFilter; e.f1 = cutoff; e.f2 = resonance; s->push(e);

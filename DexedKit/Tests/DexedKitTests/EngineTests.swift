@@ -518,6 +518,107 @@ import AudioToolbox
         }
     }
 
+    /// Reproduces "scrolling through the instruments" in a host: voices change rapidly (from the host's thread, the editor and
+    /// the MIDI program-change path) while the audio thread renders and notes are playing.
+    @Suite struct PresetScrollingStressTests {
+        static func factoryBanks() -> [Cartridge] {
+            let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Shared/Resources/FactoryBanks")
+            let files = ((try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [])
+                .filter { $0.pathExtension == "syx" }.sorted { $0.path < $1.path }
+            return files.compactMap { try? Cartridge(sysex: (try? Data(contentsOf: $0)) ?? Data()) }
+        }
+
+        @Test @MainActor func scrollingThroughEveryFactoryVoiceWhileRenderingDoesNotCrash() async throws {
+            let banks = Self.factoryBanks()
+            try #require(banks.count > 20)
+
+            let unit = try AudioUnitTests().makeUnit()
+            try unit.allocateRenderResources()
+            let engine = SynthEngine(hosted: unit.session)          // the editor, attached to the same session
+            engine.start()
+
+            // The audio thread: render continuously, with notes sounding.
+            let running = RunningFlag()
+            let renderer = Thread {
+                let format = unit.outputBusses[0].format
+                let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 512)!
+                buffer.frameLength = 512
+                var time = 0.0
+                var n = 0
+                while running.value {
+                    var flags = AudioUnitRenderActionFlags()
+                    var ts = AudioTimeStamp(); ts.mSampleTime = time; ts.mFlags = .sampleTimeValid
+                    _ = unit.renderBlock(&flags, &ts, 512, 0, buffer.mutableAudioBufferList, nil)
+                    time += 512; n += 1
+                    if n % 6 == 0 {
+                        let note = UInt8(40 + (n / 6) % 40)
+                        [UInt8]([0x90, note, 100]).withUnsafeBufferPointer { unit.scheduleMIDIEventBlock?(AUEventSampleTimeImmediate, 0, 3, $0.baseAddress!) }
+                        [UInt8]([0x80, note &- 3, 0]).withUnsafeBufferPointer { unit.scheduleMIDIEventBlock?(AUEventSampleTimeImmediate, 0, 3, $0.baseAddress!) }
+                    }
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+            }
+            renderer.start()
+
+            // The host's thread: sets presets (like clicking through the host's preset list).
+            let hostThread = Thread {
+                var i = 0
+                while running.value {
+                    let preset = AUAudioUnitPreset()
+                    preset.number = i % 32
+                    unit.currentPreset = preset
+                    _ = unit.factoryPresets
+                    i += 1
+                    Thread.sleep(forTimeInterval: 0.0005)
+                }
+            }
+            hostThread.start()
+
+            // The main thread: the editor changing voices and banks, plus MIDI program changes.
+            for i in 0..<1500 {
+                var settings = unit.session.settings
+                let bank = banks[i % banks.count]
+                settings.bank = bank
+                settings.bankName = "bank \(i)"
+                settings.program = i % 32
+                settings.patch = bank.patch(at: i % 32)
+                unit.session.apply(settings)
+                engine.selectProgram((i * 7) % 32)
+                if i % 5 == 0 { engine.setParameter(134, i % 32) }
+                if i % 11 == 0 { unit.session.selectProgram((i * 3) % 32) }
+                if i % 50 == 0 { _ = unit.fullState; unit.fullState = unit.fullState }
+                try await Task.sleep(for: .milliseconds(1))
+            }
+            running.value = false
+            try await Task.sleep(for: .milliseconds(100))
+            unit.deallocateRenderResources()
+        }
+    }
+
+    final class RunningFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _value = true
+        var value: Bool { get { lock.lock(); defer { lock.unlock() }; return _value } set { lock.lock(); _value = newValue; lock.unlock() } }
+    }
+
+    @Suite struct OutputGainTests {
+        @Test func gainScalesTheOutputButNotTheMeter() {
+            func measure(_ gain: Float) -> (peak: Float, meter: Float) {
+                let core = SynthCore(sampleRate: 48000)
+                core.setOutputGain(gain)
+                core.noteOn(69, velocity: 100)
+                _ = core.render(frames: 2400)
+                let peak = core.render(frames: 4800).map(abs).max() ?? 0
+                return (peak, core.status().outputLevel)
+            }
+            let full = measure(1), half = measure(0.5), none = measure(0)
+            #expect(abs(half.peak - full.peak * 0.5) < 0.01, "full=\(full.peak) half=\(half.peak)")
+            #expect(none.peak == 0)
+            #expect(abs(half.meter - full.meter) < 0.01)      // the meter reads before the volume, as the app's does
+        }
+    }
+
     @Suite struct WheelTests {
         func crossingsPerSecond(_ core: SynthCore, note: Int, bend: Int? = nil) -> Double {
             if let bend { core.pitchBend(bend) }

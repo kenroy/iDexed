@@ -63,6 +63,8 @@ void dexed_get_status(DexedSynth *s, DexedStatus *out);
 
 // Portamento: `time` is the CC-5-style value 0…127 (0 = off); `glissando` snaps the glide to semitone steps.
 void dexed_set_portamento(DexedSynth *s, int time, bool glissando);
+// Output gain applied to the rendered audio (after metering). 1 = unity. Thread-safe; used for the plug-in's Volume.
+void dexed_set_output_gain(DexedSynth *s, float gain);
 // Scales incoming velocities by 100/127, like a DX7 whose keyboard tops out at 100.
 void dexed_set_normalize_velocity(DexedSynth *s, bool on);
 

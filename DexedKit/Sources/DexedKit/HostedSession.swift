@@ -21,8 +21,6 @@ public struct HostedSettings: Sendable, Equatable {
 /// The Audio Unit owns the session; the editor attaches to it when the host opens the plug-in window.
 public final class HostedSession: @unchecked Sendable {
     public let core: SynthCore
-    /// Read on the audio thread each block.
-    public let volumeBox = VolumeBox()
     /// Called on the main queue when the host (not the editor) changed something: presets, parameters, state restore.
     public var onExternalChange: (@Sendable () -> Void)?
 
@@ -46,13 +44,13 @@ public final class HostedSession: @unchecked Sendable {
         change(&_settings)
         let volume = _settings.volume
         lock.unlock()
-        volumeBox.value = volume
+        core.setOutputGain(volume)
     }
 
     /// Host → session: pushes the new settings into the engine and tells the editor.
     public func apply(_ new: HostedSettings) {
         lock.lock(); _settings = new; lock.unlock()
-        volumeBox.value = new.volume
+        core.setOutputGain(new.volume)
         core.setPatch(new.patch)
         core.setEngine(new.engine)
         core.setMasterTune(new.tune)
@@ -74,7 +72,7 @@ public final class HostedSession: @unchecked Sendable {
     public func setHostParameter(_ address: Int, _ value: Double) {
         var s = settings
         switch address {
-        case HostParameter.volume: s.volume = Float(value); volumeBox.value = s.volume
+        case HostParameter.volume: s.volume = Float(value); core.setOutputGain(s.volume)
         case HostParameter.cutoff: s.cutoff = value; core.setFilter(cutoff: value, resonance: s.resonance)
         case HostParameter.resonance: s.resonance = value; core.setFilter(cutoff: s.cutoff, resonance: value)
         case HostParameter.tune: s.tune = (value + 100) / 200; core.setMasterTune(s.tune)
@@ -141,8 +139,4 @@ public final class HostedSession: @unchecked Sendable {
 /// Parameter addresses exposed to the host for automation.
 public enum HostParameter {
     public static let volume = 0, cutoff = 1, resonance = 2, tune = 3
-}
-
-public final class VolumeBox: @unchecked Sendable {
-    public var value: Float = 1
 }
