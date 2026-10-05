@@ -299,7 +299,17 @@ public final class SynthEngine {
     /// The engine numbers operators in storage order (bit 0 = OP6 … bit 5 = OP1), so flip the UI order.
     private var opMask: Int { operatorEnabled.enumerated().reduce(0) { $0 | ($1.element ? 1 << (5 - $1.offset) : 0) } }
 
-    public init() {
+    /// Remembers the loaded bank, the selected program and the voice being edited between launches (standalone app only;
+    /// a plug-in's state belongs to the host's project).
+    private var persistsState = false
+    private var restoringState = false
+    private var saveTask: Task<Void, Never>?
+    private enum StateKey {
+        static let bank = "state.bank", bankName = "state.bankName", program = "state.program", patch = "state.patch"
+    }
+
+    /// - Parameter restoresState: bring back the bank, program and voice from the last run, and keep saving them.
+    public init(restoresState: Bool = false) {
         let audioEngine = AVAudioEngine()
         let hardwareRate = audioEngine.outputNode.outputFormat(forBus: 0).sampleRate
         audio = audioEngine
@@ -313,6 +323,10 @@ public final class SynthEngine {
         core.setFilter(cutoff: filterCutoff, resonance: filterResonance)
         applyControllerSettings()
         restoreTuning()
+        if restoresState {
+            restoreWorkingState()
+            persistsState = true
+        }
 
         let core = self.core
         midi.onMessage = { [weak self] status, d1, d2 in
@@ -366,6 +380,7 @@ public final class SynthEngine {
     }
 
            private func syncToHost() {
+        guard hosted != nil else { scheduleStateSave(); return }
         guard let hosted, !applyingFromHost else { return }
         hosted.update { s in
             s.patch = patch; s.bank = bank; s.bankName = bankName; s.program = programIndex
@@ -515,6 +530,45 @@ public final class SynthEngine {
         core.panic()
         audio?.stop()
         isRunning = false
+    }
+
+    // MARK: Remembering the working state
+
+    /// Saves shortly after the last change, so dragging a knob doesn't write on every step.
+    private func scheduleStateSave() {
+        guard persistsState, !restoringState else { return }
+        saveTask?.cancel()
+        saveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            self?.saveWorkingState()
+        }
+    }
+
+    /// Writes the working state now. Called after a short delay on changes, and available for a flush on quit.
+    public func saveWorkingState() {
+        guard persistsState, hosted == nil else { return }
+        let d = UserDefaults.standard
+        d.set(bank.sysexData(), forKey: StateKey.bank)
+        d.set(bankName, forKey: StateKey.bankName)
+        d.set(programIndex, forKey: StateKey.program)
+        d.set(Data(patch.bytes), forKey: StateKey.patch)
+    }
+
+    private func restoreWorkingState() {
+        let d = UserDefaults.standard
+        guard let data = d.data(forKey: StateKey.bank), let saved = try? Cartridge(sysex: data) else { return }
+        restoringState = true
+        defer { restoringState = false }
+        bank = saved
+        bankName = d.string(forKey: StateKey.bankName) ?? "Restored Bank"
+        programIndex = max(0, min(Cartridge.voiceCount - 1, d.integer(forKey: StateKey.program)))
+        // The voice as it was last edited, which may differ from the stored slot.
+        if let bytes = d.data(forKey: StateKey.patch), bytes.count == Patch.initVoice.bytes.count {
+            load(patch: Patch(bytes: [UInt8](bytes)))
+        } else {
+            load(patch: saved.patch(at: programIndex))
+        }
     }
 
     // MARK: Playing

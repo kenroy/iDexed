@@ -1170,6 +1170,93 @@ extension AllEngineTests {
 }
 
 extension AllEngineTests {
+    @Suite(.serialized) struct WorkingStatePersistenceTests {
+        @MainActor static func isolated(_ body: () async throws -> Void) async rethrows {
+            let d = UserDefaults.standard
+            let keys = ["state.bank", "state.bankName", "state.program", "state.patch"]
+            let saved = keys.map { d.object(forKey: $0) }
+            keys.forEach(d.removeObject(forKey:))
+            defer { for (k, v) in zip(keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } } }
+            try await body()
+        }
+
+        @Test @MainActor func bankProgramAndEditsComeBackAfterARestart() async throws {
+            try await Self.isolated {
+                let first = SynthEngine(restoresState: true)
+                var bank = Cartridge()
+                for i in 0..<Cartridge.voiceCount { var p = Patch.initVoice; p.name = "VOICE \(i)"; bank.setPatch(p, at: i) }
+                first.load(bank: bank, name: "My Cart")
+                first.selectProgram(5, sendMIDI: false)
+                first.setParameter(134, 17)                           // an edit that was never stored into the bank
+                try await Task.sleep(for: .milliseconds(900))        // the save is debounced
+
+                let second = SynthEngine(restoresState: true)
+                #expect(second.bankName == "My Cart")
+                #expect(second.programIndex == 5)
+                #expect(second.patch.name == "VOICE 5")
+                #expect(second.patch.algorithm == 17)
+                #expect(second.bank.names[9] == "VOICE 9")
+            }
+        }
+
+        @Test @MainActor func anEngineThatDoesNotOptInStartsFreshAndSavesNothing() async throws {
+            try await Self.isolated {
+                let plain = SynthEngine()
+                var bank = Cartridge(); var p = Patch.initVoice; p.name = "NOPE"; bank.setPatch(p, at: 0)
+                plain.load(bank: bank, name: "Ignored")
+                try await Task.sleep(for: .milliseconds(700))
+                #expect(UserDefaults.standard.data(forKey: "state.bank") == nil)
+                #expect(SynthEngine(restoresState: true).bankName == "Init Bank")
+            }
+        }
+    }
+
+    @Suite struct BankImportTests {
+        func makeTemp() throws -> URL {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("import-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        func write(_ name: String, _ size: Int, in dir: URL) throws -> URL {
+            let url = dir.appendingPathComponent(name)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 0x42, count: size).write(to: url)
+            return url
+        }
+
+        @Test func copiesFilesAndFoldersKeepingStructureAndSkippingOtherTypes() throws {
+            let src = try makeTemp(), dst = try makeTemp()
+            defer { try? FileManager.default.removeItem(at: src); try? FileManager.default.removeItem(at: dst) }
+            let single = try write("Loose.syx", 100, in: src)
+            let folder = src.appendingPathComponent("Brass")
+            _ = try write("B1.syx", 10, in: folder)
+            _ = try write("Sub/B2.SYX", 10, in: folder)
+            _ = try write("notes.txt", 5, in: folder)
+            let other = try write("sound.sf2", 5, in: src)
+
+            let summary = BankFolder.importBanks(from: [single, folder, other], into: dst)
+            #expect(summary.copied == 3)
+            #expect(summary.notBanks == 2)
+            #expect(summary.failed == 0)
+            let found = BankFolder.scan(dst)
+            #expect(found.map(\.folder).sorted() == ["", "Brass", "Brass/Sub"])
+        }
+
+        @Test func sameFileTwiceIsLeftAloneAndDifferentOneIsKeptAsACopy() throws {
+            let src = try makeTemp(), dst = try makeTemp()
+            defer { try? FileManager.default.removeItem(at: src); try? FileManager.default.removeItem(at: dst) }
+            let a = try write("Bank.syx", 50, in: src)
+            #expect(BankFolder.importBanks(from: [a], into: dst).copied == 1)
+            let again = BankFolder.importBanks(from: [a], into: dst)
+            #expect(again.copied == 0 && again.duplicates == 1)
+
+            let other = try makeTemp(); defer { try? FileManager.default.removeItem(at: other) }
+            let changed = try write("Bank.syx", 60, in: other)           // same name, different size
+            #expect(BankFolder.importBanks(from: [changed], into: dst).copied == 1)
+            #expect(Set(BankFolder.scan(dst).map(\.name)) == ["Bank", "Bank 2"])
+        }
+    }
+
     @Suite struct BankBrowserTests {
         @Test func scanFindsSyxFilesRecursivelyAndSortsThem() throws {
             let root = FileManager.default.temporaryDirectory.appendingPathComponent("iDexedBanks-\(UUID().uuidString)")

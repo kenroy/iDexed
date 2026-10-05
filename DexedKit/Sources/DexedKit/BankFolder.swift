@@ -10,8 +10,82 @@ public struct BankFileInfo: Identifiable, Hashable, Sendable {
     public let folder: String
 }
 
+/// What an import did.
+public struct BankImportSummary: Equatable, Sendable {
+    public var copied = 0
+    /// Already in the destination with the same size.
+    public var duplicates = 0
+    /// Files that aren't `.syx`, so the browser couldn't use them.
+    public var notBanks = 0
+    public var failed = 0
+    public init() {}
+
+    public var text: String {
+        var parts = ["Imported \(copied) bank\(copied == 1 ? "" : "s")"]
+        if duplicates > 0 { parts.append("\(duplicates) already there") }
+        if notBanks > 0 { parts.append("\(notBanks) skipped (not .syx)") }
+        if failed > 0 { parts.append("\(failed) couldn't be copied") }
+        return parts.joined(separator: ", ") + "."
+    }
+}
+
 /// Finds and opens DX7 bank files in a folder (for the bank browser).
 public enum BankFolder {
+    /// Copies `.syx` files into `destination`. A chosen folder keeps its name and structure underneath, so a big
+    /// collection stays organised. Files already there with the same size are left alone; a different file with the same
+    /// name is kept as "name 2.syx". Other kinds of file are counted and skipped.
+    public static func importBanks(from sources: [URL], into destination: URL) -> BankImportSummary {
+        var summary = BankImportSummary()
+        let fm = FileManager.default
+        for source in sources {
+            let scoped = source.startAccessingSecurityScopedResource()
+            defer { if scoped { source.stopAccessingSecurityScopedResource() } }
+            let isDirectory = (try? source.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true
+            if isDirectory {
+                let base = destination.appendingPathComponent(source.lastPathComponent, isDirectory: true)
+                let rootParts = source.standardizedFileURL.pathComponents
+                guard let walker = fm.enumerator(at: source, includingPropertiesForKeys: [.isRegularFileKey],
+                                                 options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { summary.failed += 1; continue }
+                for case let file as URL in walker {
+                    guard (try? file.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+                    guard file.pathExtension.lowercased() == "syx" else { summary.notBanks += 1; continue }
+                    let parts = file.deletingLastPathComponent().standardizedFileURL.pathComponents
+                    var folder = base
+                    for part in parts.dropFirst(rootParts.count) { folder.appendPathComponent(part, isDirectory: true) }
+                    copy(file, toFolder: folder, summary: &summary)
+                }
+            } else if source.pathExtension.lowercased() == "syx" {
+                copy(source, toFolder: destination, summary: &summary)
+            } else {
+                summary.notBanks += 1
+            }
+        }
+        return summary
+    }
+
+    private static func copy(_ file: URL, toFolder folder: URL, summary: inout BankImportSummary) {
+        let fm = FileManager.default
+        do {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+            var target = folder.appendingPathComponent(file.lastPathComponent)
+            if fm.fileExists(atPath: target.path) {
+                let a = (try? fm.attributesOfItem(atPath: file.path)[.size] as? Int) ?? -1
+                let b = (try? fm.attributesOfItem(atPath: target.path)[.size] as? Int) ?? -2
+                if a == b { summary.duplicates += 1; return }
+                let stem = file.deletingPathExtension().lastPathComponent, ext = file.pathExtension
+                var n = 2
+                repeat {
+                    target = folder.appendingPathComponent("\(stem) \(n)").appendingPathExtension(ext)
+                    n += 1
+                } while fm.fileExists(atPath: target.path)
+            }
+            try fm.copyItem(at: file, to: target)
+            summary.copied += 1
+        } catch {
+            summary.failed += 1
+        }
+    }
+
     /// Recursively lists the `.syx` files under `root`, skipping hidden files, sorted by folder then name.
     /// Stops after `limit` files so a huge folder can't stall the app.
     public static func scan(_ root: URL, limit: Int = 5000) -> [BankFileInfo] {

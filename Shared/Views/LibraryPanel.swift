@@ -11,7 +11,9 @@ struct LibraryPanel: View {
     @Environment(SynthEngine.self) private var engine
     var library: BankLibrary
     var mode: Mode = .combined
-    @State private var choosingFolder = false
+    enum PickingKind { case folder, banks }
+    @State private var picking: PickingKind?
+    @State private var importSummary: String?
     @State private var query = ""
     /// When there's only room for one pane: true shows the bank list, false shows the voices.
     @State private var showingList = true
@@ -31,7 +33,7 @@ struct LibraryPanel: View {
                 }
                 emptyFolderHint
             }
-            .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder], onCompletion: folderChosen)
+            .modifier(filePicking)
         case .banks:
             Panel(title: "Banks") {
                 searchAndFolders
@@ -39,7 +41,7 @@ struct LibraryPanel: View {
                     .background(Color.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 emptyFolderHint
             }
-            .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder], onCompletion: folderChosen)
+            .modifier(filePicking)
         case .voices:
             Panel(title: "Voices") {
                 voicePane(scrolls: true, fillsHeight: true)
@@ -54,9 +56,8 @@ struct LibraryPanel: View {
         }
     }
 
-    private func folderChosen(_ result: Result<URL, Error>) {
-        if case .success(let url) = result { library.chooseFolder(url) }
-    }
+    /// One file picker for both jobs: choosing a folder of banks to browse, and importing banks into Cartridges.
+    private var filePicking: FilePicking { FilePicking(picking: $picking, summary: $importSummary, library: library) }
 
     // MARK: Layouts
 
@@ -312,8 +313,10 @@ struct LibraryPanel: View {
     /// applies to the whole library and not to a bank in the list.
     private var foldersMenu: some View {
         Menu {
+            Button("Import Banks…", systemImage: "square.and.arrow.down.on.square") { picking = .banks }
+            Divider()
             Button("Open Cartridges Folder", systemImage: "folder.badge.plus") { if let url = library.cartridgesFolderURL { openURL(url) } }
-            Button(library.folderName == nil ? "Choose Folder of Banks…" : "Change Folder…", systemImage: "folder") { choosingFolder = true }
+            Button(library.folderName == nil ? "Choose Folder of Banks…" : "Change Folder…", systemImage: "folder") { picking = .folder }
             Button("Rescan", systemImage: "arrow.clockwise") { library.rescan() }
             if library.folderName != nil {
                 Divider()
@@ -326,5 +329,35 @@ struct LibraryPanel: View {
         .controlSize(.regular)
         .fixedSize()
         .accessibilityLabel("Bank folders")
+    }
+}
+
+/// The file picker for choosing a browse folder or importing banks, and the summary shown after an import.
+private struct FilePicking: ViewModifier {
+    @Binding var picking: LibraryPanel.PickingKind?
+    @Binding var summary: String?
+    var library: BankLibrary
+    /// Separate from `picking`, so the kind is still known when the picker's completion runs.
+    @State private var presenting = false
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: picking) { _, new in if new != nil { presenting = true } }
+            .onChange(of: presenting) { _, now in
+                if !now { DispatchQueue.main.async { picking = nil } }
+            }
+            .fileImporter(isPresented: $presenting,
+                          allowedContentTypes: picking == .banks ? [.data, .folder] : [.folder],
+                          allowsMultipleSelection: picking == .banks) { result in
+                guard case .success(let urls) = result else { return }
+                if picking == .banks {
+                    Task { summary = await library.importBanks(urls).text }
+                } else if let url = urls.first {
+                    library.chooseFolder(url)
+                }
+            }
+            .alert("Import Banks", isPresented: Binding(get: { summary != nil }, set: { if !$0 { summary = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: { Text(summary ?? "") }
     }
 }

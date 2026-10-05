@@ -101,7 +101,12 @@ struct ContentView: View {
             if !engine.isHostedPlugin { typist.start() }   // the host owns the keyboard inside a plug-in
         }
         .onChange(of: editingName) { typist.isTypingText = editingName }
-        .onChange(of: scenePhase) { if scenePhase != .active { typist.releaseAll() } }
+        .onChange(of: scenePhase) {
+            if scenePhase != .active {
+                typist.releaseAll()
+                engine.saveWorkingState()       // don't lose the last edit if the app is closed right away
+            }
+        }
         .fileImporter(isPresented: $importing, allowedContentTypes: [.sysex, .data, .plainText]) { result in
             switch result {
             case .success(let url):

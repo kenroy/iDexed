@@ -45,6 +45,7 @@ final class BankLibrary {
     init() {
         restoreFolder()
         scanCartridges()
+        restoreSelection()
     }
 
     // MARK: The app's own Cartridges folder
@@ -61,6 +62,14 @@ final class BankLibrary {
     private func scanCartridges() {
         guard let dir = Self.cartridgesDirectory else { cartridges = []; return }
         cartridges = BankFolder.scan(dir).map { Entry(id: $0.url, name: $0.name, folder: $0.folder, isFactory: false) }
+    }
+
+    /// Copies `.syx` files, or whole folders of them, into the Cartridges folder, then rescans.
+    func importBanks(_ urls: [URL]) async -> BankImportSummary {
+        guard let dir = Self.cartridgesDirectory else { var s = BankImportSummary(); s.failed = urls.count; return s }
+        let summary = await Task.detached { BankFolder.importBanks(from: urls, into: dir) }.value
+        rescan()
+        return summary
     }
 
     /// What to open to show the Cartridges folder: the folder itself in Finder (Mac), or the Files app (iOS and iPadOS).
@@ -143,8 +152,26 @@ final class BankLibrary {
 
     // MARK: Previewing
 
-    func select(_ entry: Entry?) {
+    /// A stable name for an entry that survives relaunching (the file URLs can move, for example after an app update).
+    private static func key(for entry: Entry) -> String {
+        (entry.isFactory ? "f:" : "u:") + (entry.folder.isEmpty ? "" : entry.folder + "/") + entry.name
+    }
+
+    /// Selects the entry that was open last time, once the lists have been scanned.
+    private func restoreSelection() {
+        guard let key = UserDefaults.standard.string(forKey: Self.selectionKey) else { return }
+        let all = factory + cartridges + user
+        if let match = all.first(where: { Self.key(for: $0) == key }) { select(match, remember: false) }
+    }
+
+    private static let selectionKey = "bankLibrarySelection"
+
+    func select(_ entry: Entry?, remember: Bool = true) {
         selected = entry
+        if remember {
+            if let entry { UserDefaults.standard.set(Self.key(for: entry), forKey: Self.selectionKey) }
+            else { UserDefaults.standard.removeObject(forKey: Self.selectionKey) }
+        }
         guard let entry else { preview = nil; previewError = nil; return }
         do {
             preview = try BankFolder.load(entry.id)

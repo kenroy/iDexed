@@ -34,7 +34,7 @@ struct iDexedApp: App {
         guard engine == nil else { return }
         let began = ContinuousClock.now
         try? await Task.sleep(for: .milliseconds(60))      // let the splash render first
-        let created = SynthEngine()
+        let created = SynthEngine(restoresState: true)
         loadDefaultBank(into: created)
         // Hold the splash long enough for the operators to finish wiring up.
         let remaining = Duration.milliseconds(1900) - (ContinuousClock.now - began)
