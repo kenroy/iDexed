@@ -43,6 +43,7 @@ struct ContentView: View {
                     ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .labelsHidden()
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
 
@@ -148,6 +149,7 @@ private struct HeaderView: View {
                         ForEach(Tab.allCases) { Text($0.shortTitle).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    .labelsHidden()
                     .fixedSize()                       // never squeeze or truncate the segment titles
                     .layoutPriority(2)
                     level(volume: $engine.masterVolume, tight: true)

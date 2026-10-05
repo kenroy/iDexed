@@ -22,9 +22,25 @@ public final class AudioUnitViewController: AUViewController, AUAudioUnitFactory
 
     public nonisolated func createAudioUnit(with componentDescription: AudioComponentDescription) throws -> AUAudioUnit {
         let unit = try DexedAudioUnit(componentDescription: componentDescription, options: [])
+        Self.loadDefaultBank(into: unit.session)
         box.set(unit)
         Task { @MainActor in self.attachEditorIfPossible() }
         return unit
+    }
+
+    /// A new instance starts on the first Dexed factory bank instead of 32 empty voices, so there are real sounds (and host
+    /// presets) straight away. A saved project replaces this when the host restores its state, which happens after creation.
+    private nonisolated static func loadDefaultBank(into session: HostedSession) {
+        let banks = FactoryBanks.all
+        guard let bank = banks.first(where: { $0.name.hasPrefix("Dexed") }) ?? banks.first,
+              let data = try? Data(contentsOf: bank.url),
+              let cartridge = try? Cartridge(sysex: data) else { return }
+        var settings = session.settings
+        settings.bank = cartridge
+        settings.bankName = bank.name
+        settings.program = 0
+        settings.patch = cartridge.patch(at: 0)
+        session.apply(settings)
     }
 
     #if canImport(AppKit)
