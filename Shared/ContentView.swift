@@ -329,15 +329,18 @@ private struct HeaderView: View {
             if !engine.isHostedPlugin {
                 RoutePickerButton().frame(width: 30, height: 30).accessibilityLabel("Audio output")
             }
-            #else
-            Image(systemName: "speaker.fill").foregroundStyle(Theme.dim)
             #endif
         }
         captioned("VOLUME") {
-            Slider(value: volume, in: 0...1)
-                .frame(minWidth: tight ? 60 : 90, maxWidth: tight ? 120 : compact ? .infinity : 110)
-                .accessibilityLabel("Volume")
-                .midiMappable(.volume)
+            HStack(spacing: 6) {
+                #if os(macOS)
+                Image(systemName: "speaker.fill").foregroundStyle(Theme.dim)      // sits right beside the slider it labels
+                #endif
+                Slider(value: volume, in: 0...1)
+                    .frame(minWidth: tight ? 60 : 90, maxWidth: tight ? 120 : compact ? .infinity : 110)
+                    .accessibilityLabel("Volume")
+                    .midiMappable(.volume)
+            }
         }
     }
 

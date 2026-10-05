@@ -40,21 +40,32 @@ struct LibraryPanel: View {
     }
 
     private var bankPicker: some View {
-        Picker("Bank", selection: Binding(get: { library.selected }, set: { library.select($0) })) {
-            Text("Choose a bank…").tag(BankLibrary.Entry?.none)
-            Section("Factory Banks") {
-                ForEach(library.factory) { Text($0.name).tag(BankLibrary.Entry?.some($0)) }
-            }
-            if !library.user.isEmpty {
-                Section(library.folderName ?? "My Banks") {
-                    ForEach(library.user) { entry in
-                        Text(entry.folder.isEmpty ? entry.name : "\(entry.folder) / \(entry.name)").tag(BankLibrary.Entry?.some(entry))
+        Menu {
+            Picker("Bank", selection: Binding(get: { library.selected }, set: { library.select($0) })) {
+                Text("Choose a bank…").tag(BankLibrary.Entry?.none)
+                Section("Factory Banks") {
+                    ForEach(library.factory) { Text($0.name).tag(BankLibrary.Entry?.some($0)) }
+                }
+                if !library.user.isEmpty {
+                    Section(library.folderName ?? "My Banks") {
+                        ForEach(library.user) { entry in
+                            Text(entry.folder.isEmpty ? entry.name : "\(entry.folder) / \(entry.name)").tag(BankLibrary.Entry?.some(entry))
+                        }
                     }
                 }
             }
+            .pickerStyle(.inline)
+        } label: {
+            // Same look as the other dropdowns: the value, then a chevron.
+            HStack(spacing: 5) {
+                Text(library.selected?.name ?? "Choose a bank…")
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down").font(.caption.weight(.bold))
+            }
         }
-        .pickerStyle(.menu)
-        .labelsHidden()
+        .menuIndicator(.hidden)
+        .fixedSize()
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel("Bank to browse")
     }

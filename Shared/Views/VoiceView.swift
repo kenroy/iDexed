@@ -28,10 +28,25 @@ struct VoiceView: View {
                           enabled: engine.operatorEnabled, selected: $selectedOperator)
                 .frame(height: 190)
             HStack {
-                Stepper(value: algorithmBinding, in: 0...31) {
-                    Text("Algorithm \(engine.patch.algorithm + 1)")
-                        .font(.body.monospacedDigit().weight(.semibold))
+                // Jump straight to any of the 32 algorithms from the menu; the stepper nudges by one.
+                Menu {
+                    Picker("Algorithm", selection: algorithmBinding) {
+                        ForEach(0..<32, id: \.self) { Text("Algorithm \($0 + 1)").tag($0) }
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    HStack(spacing: 5) {
+                        Text("Algorithm \(engine.patch.algorithm + 1)")
+                            .font(.body.monospacedDigit().weight(.semibold))
+                        Image(systemName: "chevron.down")
+                            .font(.caption.weight(.bold))
+                    }
                 }
+                .menuIndicator(.hidden)          // our own chevron, so it looks the same on every platform
+                .fixedSize()
+                Spacer(minLength: 0)
+                Stepper("Algorithm", value: algorithmBinding, in: 0...31)
+                    .labelsHidden()
             }
             ParamRow {
                 ParamControl(info: Parameters.feedback, tint: .orange)
@@ -62,7 +77,7 @@ struct VoiceView: View {
         Panel(title: "LFO") {
             ParamRow {
                 ParamControl(info: Parameters.lfoWave)
-                ParamControl(info: Parameters.lfoSync)
+                ParamControl(info: Parameters.lfoSync, switchInset: 0)
             }
             ParamRow {
                 ParamControl(info: Parameters.lfoSpeed)
@@ -177,18 +192,3 @@ struct VoiceView: View {
     }
 }
 
-/// An always-visible capsule that fills with the accent colour when on, so its state is obvious at a glance.
-private struct SwitchChipStyle: ToggleStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Button { configuration.isOn.toggle() } label: {
-            configuration.label
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 10).padding(.vertical, 5)
-                .foregroundStyle(configuration.isOn ? Color.black : Theme.dim)
-                .background(Capsule().fill(configuration.isOn ? Color.accentColor : Color.clear))
-                .overlay(Capsule().strokeBorder(configuration.isOn ? Color.clear : Theme.dim.opacity(0.5), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
-    }
-}
