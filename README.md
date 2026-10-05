@@ -37,7 +37,7 @@ Everything in Dexed has now been ported, with those MTS-ESP limits.
 
 ## Getting more banks
 iDexed reads standard DX7 SysEx (`.syx`) banks. The [Dexed project page](https://asb2m10.github.io/dexed/) links to a large
-DX7 compilation by BlackWinny from KVR, `Dexed_cart_1.0.zip`. Unzip it, then in iDexed open the Bank tab ▸ **Folders ▸ Import Banks…**
+DX7 compilation by BlackWinny from KVR, [`Dexed_cart_1.0.zip`](https://hsjp.eu/downloads/Dexed/Dexed_cart_1.0.zip). Unzip it, then in iDexed open the Bank tab ▸ **Folders ▸ Import Banks…**
 and choose the unzipped folder. Its subfolders are kept and the banks appear in the searchable list under Cartridges.
 You can also drop the files into the Cartridges folder yourself (**Folders ▸ Open Cartridges Folder**, or the Files app on iPad and iPhone)
 and press **Rescan**.
