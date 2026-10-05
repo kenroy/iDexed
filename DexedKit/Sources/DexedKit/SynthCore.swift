@@ -82,6 +82,11 @@ public final class SynthCore: @unchecked Sendable {
     /// 0 = omni, 1…16 = listen only on that channel.
     public func setMIDIChannel(_ channel: Int) { dexed_set_midi_channel(synth, Int32(channel)) }
     public func acceptsChannel(_ channel: Int) -> Bool { dexed_accepts_channel(synth, Int32(channel)) }
+    /// MTS-ESP (macOS only): follow a connected master's tuning. `isMTSSupported` is false where there is no client.
+    public func setMTS(_ on: Bool) { dexed_set_mts(synth, on) }
+    public var isMTSSupported: Bool { dexed_mts_supported(synth) }
+    public var isMTSConnected: Bool { dexed_mts_connected(synth) }
+    public var mtsScaleName: String { String(cString: dexed_mts_scale_name(synth)) }
     public func setTransposeAsScale(_ on: Bool) { dexed_set_transpose_as_scale(synth, on) }
     public func setMPE(enabled: Bool, range: Int) { dexed_set_mpe(synth, enabled, Int32(range)) }
     public func controlChange(_ cc: Int, _ v: Int) { dexed_control_change(synth, Int32(cc), Int32(v)) }

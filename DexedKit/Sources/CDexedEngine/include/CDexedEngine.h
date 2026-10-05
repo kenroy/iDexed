@@ -42,6 +42,13 @@ void dexed_set_midi_channel(DexedSynth *s, int channel);
 bool dexed_accepts_channel(DexedSynth *s, int channel);
 // With a custom tuning, make whole-octave transposes shift by whole scale periods (Dexed's "Transpose 12 as scale").
 void dexed_set_transpose_as_scale(DexedSynth *s, bool on);
+
+// MTS-ESP (ODDSound) microtuning from a master plug-in, macOS only. `supported` is false where there is no client
+// (iOS, iPadOS); `connected` is true while a master is present; with MTS-ESP on, the master overrides other tunings.
+void dexed_set_mts(DexedSynth *s, bool on);
+bool dexed_mts_supported(DexedSynth *s);
+bool dexed_mts_connected(DexedSynth *s);
+const char *dexed_mts_scale_name(DexedSynth *s);
 void dexed_control_change(DexedSynth *s, int cc, int value);
 void dexed_aftertouch(DexedSynth *s, int value);
 void dexed_panic(DexedSynth *s);

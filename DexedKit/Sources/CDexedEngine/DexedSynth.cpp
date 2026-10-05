@@ -2,6 +2,7 @@
 // (keydown/keyup/chooseNote/processBlock). Copyright (c) Pascal Gauthier and contributors; GPL v3.
 #include "include/CDexedEngine.h"
 
+#include <TargetConditionals.h>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -36,7 +37,7 @@ constexpr int kMinNoteBlocks = 15;
 
 enum EventType : uint8_t {
     EvNoteOn, EvNoteOff, EvPitchBend, EvCC, EvAftertouch, EvPatch, EvParam, EvPanic,
-    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE, EvTransposeAsScale
+    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE, EvTransposeAsScale, EvMTS
 };
 
 struct Event {
@@ -110,6 +111,8 @@ struct DexedSynth {
     std::atomic<float> outputGain{1.0f};
     std::atomic<int> midiChannel{0};          // 0 = omni, otherwise 1…16
     std::atomic<bool> mpeAcceptsAll{false};   // MPE controllers use a channel per note, so the filter must stand aside
+    MTSClient *mts = nullptr;                 // MTS-ESP client (macOS only; nullptr elsewhere)
+    bool mtsOn = true;                        // audio thread: follow an MTS-ESP master when there is one
     bool transposeAsScale = true;             // whole-octave transposes shift by whole scale periods on a custom tuning
     float vu = 0;
     double sampleRate = 48000;
@@ -128,15 +131,25 @@ struct DexedSynth {
         vu = 0;
     }
 
+    // The client only when MTS-ESP is switched on, so voices fall back to the ordinary tuning otherwise.
+    MTSClient *activeMTS() const { return mtsOn ? mts : nullptr; }
+
     void setSampleRate(double sr) {
         panic();
         initRateDependentTables(sr);
-        for (auto &v : voices) v.note.reset(new Dx7Note(tuning, nullptr));
+        for (auto &v : voices) v.note.reset(new Dx7Note(tuning, activeMTS()));
         lfo.reset(data + 137);
         carryPos = N;
     }
 
+    ~DexedSynth() {
+        if (mts) MTS_DeregisterClient(mts);
+    }
+
     DexedSynth(double sr) {
+#if TARGET_OS_OSX
+        mts = MTS_RegisterClient();       // MTS-ESP masters only exist on desktop; iOS and iPadOS run without one
+#endif
         Exp2::init();
         Tanh::init();
         Sin::init();
@@ -162,7 +175,7 @@ struct DexedSynth {
         controllers.at.range = 50;    controllers.at.pitch = true;
         controllers.refresh();
 
-        for (auto &v : voices) v.note.reset(new Dx7Note(tuning, nullptr));
+        for (auto &v : voices) v.note.reset(new Dx7Note(tuning, activeMTS()));
         lfo.reset(data + 137);
     }
 
@@ -204,6 +217,7 @@ struct DexedSynth {
         if (normalizeVelocity) velo = (int)((float)velo * 0.7874015f);   // 100/127, as Dexed
         pitch += transpose();
         if (pitch < 0 || pitch > 127) return;
+        if (mtsOn && mts && MTS_ShouldFilterNote(mts, (char)pitch, (signed char)(channel - 1))) return;   // the master asked for this note to be ignored
 
         if (controllers.mpeEnabled) {
             // Two notes down on one channel means this is not an MPE controller: fall back to normal pitch bend (as Dexed).
@@ -400,6 +414,10 @@ struct DexedSynth {
                 controllers.portamento_enable_cc = e.a > 0;
                 controllers.portamento_gliss_cc = e.b != 0;
                 break;
+            case EvMTS:
+                mtsOn = e.a != 0;
+                for (auto &v : voices) v.note->setMTSClient(activeMTS());
+                break;
             case EvTransposeAsScale: transposeAsScale = e.a != 0; break;
             case EvNormalizeVelocity: normalizeVelocity = e.a != 0; break;
         }
@@ -431,8 +449,10 @@ struct DexedSynth {
         for (int j = 0; j < N; ++j) { audiobuf.get()[j] = 0; sum[j] = 0; }
         int32_t lfovalue = lfo.getsample();
         int32_t lfodelay = lfo.getdelay();
+        const bool followMaster = mtsOn && mts && MTS_HasMaster(mts);
         for (auto &v : voices) {
             if (!v.live) continue;
+            if (followMaster) v.note->updateBasePitches();      // the master may retune while notes are held
             v.note->compute(audiobuf.get(), lfovalue, lfodelay, &controllers);
             if (v.age < kMinNoteBlocks) v.age++;
             if (v.pendingKeyup && v.age >= kMinNoteBlocks) {
@@ -534,6 +554,10 @@ bool dexed_accepts_channel(DexedSynth *s, int channel) {
     return wanted == 0 || channel == wanted || s->mpeAcceptsAll.load();
 }
 void dexed_set_transpose_as_scale(DexedSynth *s, bool on) { post(s, EvTransposeAsScale, on); }
+void dexed_set_mts(DexedSynth *s, bool on) { post(s, EvMTS, on); }
+bool dexed_mts_supported(DexedSynth *s) { return s->mts != nullptr; }
+bool dexed_mts_connected(DexedSynth *s) { return s->mts != nullptr && MTS_HasMaster(s->mts); }
+const char *dexed_mts_scale_name(DexedSynth *s) { return s->mts ? MTS_GetScaleName(s->mts) : ""; }
 void dexed_control_change(DexedSynth *s, int cc, int v) { post(s, EvCC, cc, v); }
 void dexed_aftertouch(DexedSynth *s, int v) { post(s, EvAftertouch, v); }
 void dexed_panic(DexedSynth *s) { post(s, EvPanic); }

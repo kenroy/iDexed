@@ -810,6 +810,34 @@ import AudioToolbox
         }
     }
 
+    @Suite struct MTSESPTests {
+        @Test func clientIsPresentOnMacAndNotConnectedWithoutAMaster() {
+            let core = SynthCore(sampleRate: 48000)
+            #if os(macOS)
+            #expect(core.isMTSSupported)
+            #else
+            #expect(!core.isMTSSupported)
+            #endif
+            #expect(!core.isMTSConnected || core.isMTSSupported)
+        }
+
+        @Test func withoutAMasterPitchIsUnchangedWhetherOrNotMTSIsOn() {
+            func hz(_ on: Bool) -> Double {
+                let core = SynthCore(sampleRate: 48000)
+                core.setMTS(on)
+                core.noteOn(69, velocity: 100)
+                _ = core.render(frames: 2400)
+                let out = core.render(frames: 48000)
+                var c = 0
+                for i in 1..<out.count where (out[i - 1] < 0) != (out[i] < 0) { c += 1 }
+                return Double(c) / 2
+            }
+            let on = hz(true), off = hz(false)
+            #expect(abs(on - 440) < 6, "on=\(on)")
+            #expect(abs(on - off) < 1, "on=\(on) off=\(off)")
+        }
+    }
+
     @Suite struct MPETests {
         func hz(_ core: SynthCore) -> Double {
             _ = core.render(frames: 2400)

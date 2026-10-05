@@ -56,6 +56,7 @@ public:
     // PG:add the update
     void update(const uint8_t patch[156], int midinote, int velocity, int channel);
     void updateBasePitches();
+    void setMTSClient(MTSClient *c) { mtsClient = c; mtsFreq = 0; }
     void peekVoiceStatus(VoiceStatus &status);
     void transferState(Dx7Note& src);
     void transferSignal(Dx7Note &src);

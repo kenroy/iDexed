@@ -12,7 +12,7 @@ let package = Package(
         .target(
             name: "CDexedEngine",
             path: "Sources/CDexedEngine",
-            exclude: [],
+            exclude: ["msfa/MTS-ESP-LICENSE.txt"],
             publicHeadersPath: "include",
             cxxSettings: [.unsafeFlags(["-std=c++17"])]
         ),

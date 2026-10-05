@@ -90,6 +90,16 @@ public final class SynthEngine {
         didSet { UserDefaults.standard.set(transposeAsScale, forKey: "transposeAsScale"); applyControllerSettings() }
     }
 
+    /// Follow an MTS-ESP master's tuning when one is running (macOS only; Dexed has this on by default).
+    public var mtsEnabled: Bool = UserDefaults.standard.object(forKey: "mtsEnabled") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(mtsEnabled, forKey: "mtsEnabled"); applyControllerSettings() }
+    }
+    /// False on iOS and iPadOS, where MTS-ESP masters don't exist.
+    public var mtsSupported: Bool { core.isMTSSupported }
+    /// True while an MTS-ESP master is running; polled with the meters.
+    public private(set) var mtsConnected = false
+    public private(set) var mtsScaleName = ""
+
     public func routing(_ source: ModSource) -> ControllerRouting {
         controllerRouting[source] ?? ControllerRouting.defaults[source] ?? ControllerRouting(range: 0)
     }
@@ -104,6 +114,7 @@ public final class SynthEngine {
         core.setNormalizeVelocity(normalizeVelocity)
         core.setMPE(enabled: mpeEnabled, range: mpeBendRange)
         core.setMIDIChannel(midiChannel)
+        core.setMTS(mtsEnabled)
         core.setTransposeAsScale(transposeAsScale)
     }
 
@@ -425,6 +436,10 @@ public final class SynthEngine {
                 guard let self else { return }
                 let s = self.core.status()
                 if s != self.status { self.status = s }
+                let connected = self.core.isMTSConnected
+                if connected != self.mtsConnected { self.mtsConnected = connected }
+                let scale = connected ? self.core.mtsScaleName : ""
+                if scale != self.mtsScaleName { self.mtsScaleName = scale }
             }
         }
     }

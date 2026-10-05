@@ -5,5 +5,16 @@
 	<!-- Lets the bank browser remember the folder you chose between launches (macOS sandbox). -->
 	<key>com.apple.security.files.bookmarks.app-scope</key>
 	<true/>
+	<!-- MTS-ESP: the client loads ODDSound's libMTS.dylib from this folder to find a master plug-in. The library is signed by
+	     ODDSound, not by us, so library validation has to be relaxed for the load to succeed. The Mac build only. -->
+	<key>com.apple.security.temporary-exception.files.absolute-path.read-only</key>
+	<array>
+		<string>/Library/Application Support/MTS-ESP/</string>
+	</array>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<!-- libMTS talks to the master through a POSIX shared-memory block with this fixed name. -->
+	<key>com.apple.security.temporary-exception.sbpl</key>
+	<string>(allow ipc-posix-shm* (ipc-posix-name "/libMTSShared"))</string>
 </dict>
 </plist>

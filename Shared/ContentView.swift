@@ -256,6 +256,15 @@ private struct HeaderView: View {
                 Button("Add Keyboard Mapping (.kbm)…") { importKind = .mapping; importing = true }
                 Toggle("Transpose 12 as Scale", isOn: Binding(get: { engine.transposeAsScale }, set: { engine.transposeAsScale = $0 }))
                 Text("On a custom tuning, an octave of transpose moves by one whole scale period.")
+                #if os(macOS)
+                if engine.mtsSupported && !engine.isHostedPlugin {      // the sandboxed plug-in can't reach a master
+                    Divider()
+                    Toggle("Follow MTS-ESP Master", isOn: Binding(get: { engine.mtsEnabled }, set: { engine.mtsEnabled = $0 }))
+                    Text(engine.mtsEnabled ? (engine.mtsConnected ? "Connected: \(engine.mtsScaleName.isEmpty ? "MTS-ESP master" : engine.mtsScaleName)"
+                                                                   : "No MTS-ESP master running")
+                                           : "Off")
+                }
+                #endif
             }
             Picker("MIDI Channel", systemImage: "pianokeys", selection: Binding(get: { engine.midiChannel }, set: { engine.midiChannel = $0 })) {
                 Text("Omni (all channels)").tag(0)

@@ -29,7 +29,11 @@ Also: MIDI CC mapping with MIDI learn, hardware DX7 SysEx send/receive (voice, b
 (browse a folder of banks and drag voices into the current bank), MPE per-note pitch bend, and Mac shortcuts
 (⌃1–6 show an operator, ⌃⇧1–6 toggle it, ⌃G / ⌃P / ⌃L switch sections).
 
-Not ported: MTS-ESP (it needs ODDSound's proprietary client library).
+MTS-ESP microtuning (macOS standalone app): with an MTS-ESP master such as ODDSound's MTS-ESP Mini running, iDexed follows its tuning,
+including live retuning of held notes. It isn't available on iOS or iPadOS, which have no MTS-ESP masters, or inside the sandboxed AUv3 plug-in.
+The client is ODDSound's open source `libMTSClient` (0BSD).
+
+Everything in Dexed has now been ported, with those MTS-ESP limits.
 
 ## License
 GPL v3 (derived from Dexed). msfa engine files are Apache-2.0 (Google / Pascal Gauthier). See `LICENSE`.
