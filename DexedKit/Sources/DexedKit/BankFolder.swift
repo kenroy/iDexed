@@ -33,6 +33,22 @@ public enum BankFolder {
         }
     }
 
+    /// Counts the other files in `root`, by extension (lowercased, "" for none), so the browser can say what it skipped.
+    public static func skippedFiles(_ root: URL, limit: Int = 20000) -> [String: Int] {
+        guard let walker = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isRegularFileKey],
+                                                          options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { return [:] }
+        var counts: [String: Int] = [:]
+        var seen = 0
+        for case let url as URL in walker {
+            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
+            seen += 1
+            if seen > limit { break }
+            let ext = url.pathExtension.lowercased()
+            if ext != "syx" { counts[ext, default: 0] += 1 }
+        }
+        return counts
+    }
+
     /// Reads a bank (or a single-voice dump, placed in slot 1) from a `.syx` file.
     public static func load(_ url: URL) throws -> Cartridge {
         try Cartridge(sysex: Data(contentsOf: url))

@@ -731,6 +731,28 @@ import AudioToolbox
             }
         }
 
+        @Test @MainActor func aVoiceOrBankFromTheBrowserCanBeSentWithoutLoadingIt() async throws {
+            try await Self.withEngine { engine in
+                let dx7 = LoopbackDestination(name: "Fake DX7 3")
+                engine.sysexDestinationID = dx7.uniqueID
+                engine.sysexChannel = 4
+                let before = engine.patch
+
+                var other = Patch.initVoice; other.name = "BROWSED"; other.algorithm = 9
+                var browsed = Cartridge(); browsed.setPatch(other, at: 0)
+                engine.sendVoiceToDX7(other)
+                engine.sendBankToDX7(browsed)
+                try await Task.sleep(for: .seconds(3.5))
+
+                let got = dx7.messages
+                #expect(got.count == 2, "got \(got.map(\.count))")
+                #expect(got.first == Cartridge.singleVoiceSysex(other, channel: 4))
+                #expect(got.last?.count == 4104)
+                #expect(got.last?[2] == 0x04, "channel byte \(String(describing: got.last?[2]))")
+                #expect(engine.patch == before, "sending must not change the loaded voice")
+            }
+        }
+
         @Test @MainActor func aRequestFromTheDX7IsAnsweredWithTheCurrentVoiceOrBank() async throws {
             try await Self.withEngine { engine in
                 let dx7 = LoopbackDestination(name: "Fake DX7 2")

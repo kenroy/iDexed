@@ -55,17 +55,23 @@ struct ContentView: View {
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
 
-            ScrollView {
-                Group {
-                    switch tab {
-                    case .voice: VoiceView(selectedOperator: $selectedOperator)
-                    case .operators: OperatorsView(selectedOperator: $selectedOperator)
-                    case .bank: BankView(showTab: $tab, library: library)
+            if tab == .bank {
+                // The Bank tab scrolls its own panels, so the current bank and the library can scroll independently.
+                BankView(showTab: $tab, library: library)
+                    .padding(.horizontal, 16).padding(.bottom, 12)
+            } else {
+                ScrollView {
+                    Group {
+                        switch tab {
+                        case .voice: VoiceView(selectedOperator: $selectedOperator)
+                        case .operators: OperatorsView(selectedOperator: $selectedOperator)
+                        case .bank: EmptyView()
+                        }
                     }
+                    .padding(.horizontal, 16).padding(.bottom, 12)
                 }
-                .padding(.horizontal, 16).padding(.bottom, 12)
+                .scrollDismissesKeyboard(.interactively)
             }
-            .scrollDismissesKeyboard(.interactively)
 
             if !keyboardCollapsed {
                 KeyboardBar(octave: $octave, maxOctave: $maxOctave, landscapePhone: landscapePhone, collapse: { withAnimation { keyboardCollapsed = true } })

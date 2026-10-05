@@ -26,7 +26,7 @@ on-screen keyboard with pitch/mod wheels, typing-keyboard and MIDI input, MIDI o
 optional local-sound mute, output filter, master tune, Scala `.scl`/`.kbm` microtuning, AUv3 plug-in (macOS, iOS, iPadOS).
 
 Also: MIDI CC mapping with MIDI learn, hardware DX7 SysEx send/receive (voice, bank and live edits), a cartridge manager
-(browse a folder of banks and drag voices into the current bank), MPE per-note pitch bend, and Mac shortcuts
+(browse the app's own Cartridges folder or any folder of banks, drag voices into the current bank, and send voices or banks to a DX7 from a right-click menu), MPE per-note pitch bend, and Mac shortcuts
 (⌃1–6 show an operator, ⌃⇧1–6 toggle it, ⌃G / ⌃P / ⌃L switch sections).
 
 MTS-ESP microtuning (macOS standalone app): with an MTS-ESP master such as ODDSound's MTS-ESP Mini running, iDexed follows its tuning,

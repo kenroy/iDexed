@@ -161,13 +161,21 @@ public final class SynthEngine {
         return sysexSender.send(data, to: id)
     }
 
-    public func sendVoiceToDX7() {
-        sendSysEx(Cartridge.singleVoiceSysex(patch, channel: sysexChannel))
+    public func sendVoiceToDX7() { sendVoiceToDX7(patch) }
+
+    /// Sends any voice, for example one picked from the bank browser, as a single-voice dump.
+    public func sendVoiceToDX7(_ voice: Patch) {
+        sendSysEx(Cartridge.singleVoiceSysex(voice, channel: sysexChannel))
     }
 
     public func sendBankToDX7() {
         storeCurrentPatch()
-        var data = [UInt8](bank.sysexData())
+        sendBankToDX7(bank)
+    }
+
+    /// Sends any bank, for example one previewed in the browser, as a 32-voice dump.
+    public func sendBankToDX7(_ cartridge: Cartridge) {
+        var data = [UInt8](cartridge.sysexData())
         data[2] |= UInt8(sysexChannel & 0x0F)
         sendSysEx(Data(data))
     }

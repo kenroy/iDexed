@@ -7,10 +7,36 @@ struct BankView: View {
     @Binding var showTab: Tab
     var library: BankLibrary
 
+    /// Widths at which the layout changes: three equal columns, then two, then one page-scrolling column.
+    private let threeColumnWidth: CGFloat = 960
+    private let twoColumnWidth: CGFloat = 800
+
     var body: some View {
-        MasonryLayout(minColumnWidth: 380, spacing: 12) {
-            currentBank
-            LibraryPanel(library: library)
+        GeometryReader { geo in
+            if geo.size.width >= threeColumnWidth {
+                // Current bank | banks | voices: equal widths, each filling the height and scrolling on its own.
+                let width = (geo.size.width - 24) / 3
+                HStack(alignment: .top, spacing: 12) {
+                    ScrollView { currentBank }.frame(width: width)
+                    LibraryPanel(library: library, mode: .banks).frame(width: width)
+                    LibraryPanel(library: library, mode: .voices).frame(width: width)
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+            } else if geo.size.width >= twoColumnWidth {
+                // Current bank | library, each scrolling on its own.
+                HStack(alignment: .top, spacing: 12) {
+                    ScrollView { currentBank }
+                    ScrollView { LibraryPanel(library: library) }
+                }
+                .frame(width: geo.size.width, height: geo.size.height)
+            } else {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        currentBank
+                        LibraryPanel(library: library)
+                    }
+                }
+            }
         }
     }
 
@@ -35,6 +61,16 @@ struct BankView: View {
                         .background(i == engine.programIndex ? Theme.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
+                    .contextMenu {
+                        if !engine.isHostedPlugin {
+                            Button("Send Voice to DX7", systemImage: "arrow.up.right.square") {
+                                engine.sendVoiceToDX7(i == engine.programIndex ? engine.patch : engine.bank.patch(at: i))
+                            }
+                            .disabled(!engine.hasSysExDestination)
+                            Button("Send Bank to DX7", systemImage: "arrow.up.right.square") { engine.sendBankToDX7() }
+                                .disabled(!engine.hasSysExDestination)
+                        }
+                    }
                     // Drop a voice from the browser onto this slot to replace it.
                     .dropDestination(for: VoicePayload.self) { items, _ in
                         guard let voice = items.first else { return false }

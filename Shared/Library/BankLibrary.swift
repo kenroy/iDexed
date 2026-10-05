@@ -1,5 +1,8 @@
 import SwiftUI
 import UniformTypeIdentifiers
+#if os(macOS)
+import AppKit
+#endif
 import DexedKit
 
 /// A voice being dragged from the bank browser onto a slot of the current bank.
@@ -26,8 +29,12 @@ final class BankLibrary {
     }
 
     private(set) var factory: [Entry] = FactoryBanks.all.map { Entry(id: $0.url, name: $0.name, folder: "", isFactory: true) }
+    /// `.syx` files in the app's own Cartridges folder (Documents/Cartridges): drop files there, then Rescan.
+    private(set) var cartridges: [Entry] = []
     private(set) var user: [Entry] = []
     private(set) var folderName: String?
+    /// Files the last scan of the chosen folder skipped because they aren't `.syx`, by extension.
+    private(set) var skippedInFolder: [String: Int] = [:]
     private(set) var selected: Entry?
     private(set) var preview: Cartridge?
     private(set) var previewError: String?
@@ -35,7 +42,44 @@ final class BankLibrary {
     private var scopedURL: URL?
     private static let bookmarkKey = "bankLibraryFolderBookmark"
 
-    init() { restoreFolder() }
+    init() {
+        restoreFolder()
+        scanCartridges()
+    }
+
+    // MARK: The app's own Cartridges folder
+
+    /// Documents/Cartridges, created on demand. Visible in the Files app on iOS and iPadOS.
+    static var cartridgesDirectory: URL? {
+        guard let docs = try? FileManager.default.url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        else { return nil }
+        let dir = docs.appendingPathComponent("Cartridges", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func scanCartridges() {
+        guard let dir = Self.cartridgesDirectory else { cartridges = []; return }
+        cartridges = BankFolder.scan(dir).map { Entry(id: $0.url, name: $0.name, folder: $0.folder, isFactory: false) }
+    }
+
+    /// What to open to show the Cartridges folder: the folder itself in Finder (Mac), or the Files app (iOS and iPadOS).
+    /// The caller opens it with the `openURL` environment action, which works inside the plug-in too.
+    var cartridgesFolderURL: URL? {
+        guard let dir = Self.cartridgesDirectory else { return nil }
+        #if os(macOS)
+        return dir
+        #else
+        return URL(string: "shareddocuments://" + dir.path)
+        #endif
+    }
+
+    /// Reveals a bank file in Finder. Mac only: iOS has no way to reveal a single file.
+    func reveal(_ entry: Entry) {
+        #if os(macOS)
+        NSWorkspace.shared.activateFileViewerSelecting([entry.id])
+        #endif
+    }
 
     // MARK: Choosing a folder
 
@@ -49,12 +93,14 @@ final class BankLibrary {
     func forgetFolder() {
         releaseFolder()
         UserDefaults.standard.removeObject(forKey: Self.bookmarkKey)
+        if let selected, user.contains(selected) { self.selected = nil; preview = nil }
         user = []
+        skippedInFolder = [:]
         folderName = nil
-        if let selected, !selected.isFactory { self.selected = nil; preview = nil }
     }
 
     func rescan() {
+        scanCartridges()
         guard let scopedURL else { return }
         scan(scopedURL)
     }
@@ -62,6 +108,7 @@ final class BankLibrary {
     private func scan(_ url: URL) {
         folderName = url.lastPathComponent
         user = BankFolder.scan(url).map { Entry(id: $0.url, name: $0.name, folder: $0.folder, isFactory: false) }
+        skippedInFolder = user.isEmpty ? BankFolder.skippedFiles(url) : [:]
     }
 
     private func releaseFolder() {
