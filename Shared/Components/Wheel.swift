@@ -80,13 +80,9 @@ struct Wheel: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .black.opacity(0.45)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
                     )
-                    .overlay {                       // grip ridges with a teal indicator line in the middle
-                        VStack(spacing: 3) {
-                            ForEach(0..<2, id: \.self) { _ in ridge }
-                            Capsule().fill(Theme.accent).frame(width: w - 14, height: 3)
-                                .shadow(color: Theme.accent.opacity(0.8), radius: 3)
-                            ForEach(0..<2, id: \.self) { _ in ridge }
-                        }
+                    .overlay {                       // just the teal indicator line
+                        Capsule().fill(Theme.accent).frame(width: w - 14, height: 3)
+                            .shadow(color: Theme.accent.opacity(0.8), radius: 3)
                     }
                     .frame(width: w - 4, height: capH)
                     .shadow(color: .black.opacity(0.65), radius: 3, y: 2)
@@ -105,13 +101,5 @@ struct Wheel: View {
                     }
             )
         }
-    }
-
-    private var ridge: some View {
-        VStack(spacing: 0) {
-            Rectangle().fill(.black.opacity(0.35)).frame(height: 1)
-            Rectangle().fill(.white.opacity(0.28)).frame(height: 1)
-        }
-        .frame(width: 18)
     }
 }

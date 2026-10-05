@@ -9,7 +9,7 @@ A native SwiftUI port of [Dexed](https://github.com/asb2m10/dexed), the open-sou
 | ![Voice tab on iPad Pro 13-inch: algorithm, global, pitch envelope, LFO and controllers cards](docs/screenshots/ipad-voice.png) | ![Operators tab on iPad Pro 13-inch: three operator cards with envelopes, meters and frequency readouts](docs/screenshots/ipad-operators.png) |
 
 <p align="center">
-  <img src="docs/screenshots/iphone-bank.png" alt="Bank tab on iPhone 16 Pro Max with the on-screen keyboard and pitch and mod wheels" width="320">
+  <img src="docs/screenshots/iphone-voice.png" alt="Voice tab on iPhone 16 Pro Max with the algorithm and global cards, on-screen keyboard and pitch and mod sliders" width="320">
 </p>
 
 ## Project layout
