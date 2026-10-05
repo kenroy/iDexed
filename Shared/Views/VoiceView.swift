@@ -81,11 +81,11 @@ struct VoiceView: View {
                 ParamControl(info: Parameters.transpose)
                 Knob(title: "Tune", value: Binding(get: { Int((engine.masterTune * 200).rounded()) },
                                                    set: { engine.masterTune = Double($0) / 200 }),
-                     range: 0...200, displayOffset: 100)
+                     range: 0...200, displayOffset: 100, control: .masterTune)
                 Knob(title: "Cutoff", value: Binding(get: { Int((engine.filterCutoff * 100).rounded()) },
-                                                     set: { engine.filterCutoff = Double($0) / 100 }), range: 0...100)
+                                                     set: { engine.filterCutoff = Double($0) / 100 }), range: 0...100, control: .cutoff)
                 Knob(title: "Reso", value: Binding(get: { Int((engine.filterResonance * 100).rounded()) },
-                                                   set: { engine.filterResonance = Double($0) / 100 }), range: 0...100)
+                                                   set: { engine.filterResonance = Double($0) / 100 }), range: 0...100, control: .resonance)
             }
             Picker("Engine", selection: $engine.engineType) {
                 ForEach(EngineType.allCases) { Text($0.title).tag($0) }
@@ -99,44 +99,45 @@ struct VoiceView: View {
     private var controllersPanel: some View {
         @Bindable var engine = engine
         return Panel(title: "Controllers") {
-            group("Pitch Bend") {
+            // Every group is the same shape: knobs on the left in a fixed grid, switches beside them, a note underneath.
+            group("Pitch Bend", note: "A Step above 0 snaps the bend to that many semitones and overrides Up and Down.") {
                 Knob(title: "Up", value: $engine.pitchBendUp, range: 0...48)
                 Knob(title: "Down", value: $engine.pitchBendDown, range: 0...48)
                 Knob(title: "Step", value: $engine.pitchBendStep, range: 0...12)
             }
-            Text("A Step above 0 snaps the bend to that many semitones and overrides Up and Down.")
-                .font(.caption2).foregroundStyle(Theme.dim)
-                .fixedSize(horizontal: false, vertical: true)
-            group("Portamento") {
-                Knob(title: "Time", value: $engine.portamentoTime, range: 0...99)
-                Toggle("Glissando", isOn: $engine.glissando)
-                    .toggleStyle(.button)
-                    .controlSize(.small)
-            }
 
+            sectionDivider
+            HStack(alignment: .top, spacing: 16) {
+                group("Portamento") {
+                    Knob(title: "Time", value: $engine.portamentoTime, range: 0...99)
+                } switches: {
+                    Toggle("Glissando", isOn: $engine.glissando)
+                }
+                group("MPE") {
+                    Knob(title: "Bend", value: $engine.mpeBendRange, range: 1...96)
+                } switches: {
+                    Toggle("Enabled", isOn: $engine.mpeEnabled)
+                }
+            }
+            noteText("MPE bends each note by its own channel's pitch wheel. It switches itself off if two notes share a channel.")
+
+            sectionDivider
             VStack(alignment: .leading, spacing: 6) {
                 Text("MIDI Controller").font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
                 Picker("Controller", selection: $selectedSource) {
                     ForEach(ModSource.allCases) { Text($0.shortTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .padding(.bottom, 8)
                 let routing = routingBinding(selectedSource)
-                ParamRow {
+                controlRow {
                     Knob(title: "Range", value: routing.range, range: 0...127)
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 6) {
-                            Toggle("Pitch", isOn: routing.pitch)
-                            Toggle("Amp", isOn: routing.amp)
-                            Toggle("EG", isOn: routing.eg)
-                        }
-                        .toggleStyle(.button)
-                        .controlSize(.small)
-                        Text("\(selectedSource.title): Pitch = vibrato, Amp = tremolo, EG = envelope level. Depth also depends on the voice's Pitch/Amp Mod Sens.")
-                            .font(.caption2).foregroundStyle(Theme.dim)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .frame(maxWidth: 230, alignment: .leading)
-                    }
+                } switches: {
+                    Toggle("Pitch", isOn: routing.pitch)
+                    Toggle("Amp", isOn: routing.amp)
+                    Toggle("EG", isOn: routing.eg)
                 }
+                noteText("\(selectedSource.title): Pitch = vibrato, Amp = tremolo, EG = envelope level. Depth also depends on the voice's Pitch/Amp Mod Sens.")
             }
         }
     }
@@ -145,10 +146,49 @@ struct VoiceView: View {
         Binding(get: { engine.routing(source) }, set: { engine.controllerRouting[source] = $0 })
     }
 
-    private func group<C: View>(_ title: String, @ViewBuilder _ content: () -> C) -> some View {
+    /// Knobs, then switches vertically centred on the dials.
+    private func controlRow<K: View, S: View>(@ViewBuilder _ knobs: () -> K, @ViewBuilder switches: () -> S = { EmptyView() }) -> some View {
+        // One row, so the switches sit right beside the knobs they belong to.
+        ParamRow {
+            knobs()
+            HStack(spacing: 6) { switches() }
+                .toggleStyle(SwitchChipStyle())
+                .padding(.top, 22)
+        }
+    }
+
+    private var sectionDivider: some View {
+        Divider().overlay(Theme.panelStroke).padding(.vertical, 8)
+    }
+
+    private func noteText(_ text: String) -> some View {
+        Text(text)
+            .font(.caption2).foregroundStyle(Theme.dim)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func group<K: View, S: View>(_ title: String, note: String? = nil, @ViewBuilder _ knobs: () -> K,
+                                         @ViewBuilder switches: () -> S = { EmptyView() }) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption2.weight(.semibold)).foregroundStyle(Theme.dim)
-            ParamRow { content() }
+            controlRow(knobs, switches: switches)
+            if let note { noteText(note) }
         }
+    }
+}
+
+/// An always-visible capsule that fills with the accent colour when on, so its state is obvious at a glance.
+private struct SwitchChipStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: {
+            configuration.label
+                .font(.subheadline.weight(.medium))
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .foregroundStyle(configuration.isOn ? Color.black : Theme.dim)
+                .background(Capsule().fill(configuration.isOn ? Color.accentColor : Color.clear))
+                .overlay(Capsule().strokeBorder(configuration.isOn ? Color.clear : Theme.dim.opacity(0.5), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
     }
 }

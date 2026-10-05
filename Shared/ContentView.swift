@@ -23,6 +23,7 @@ struct ContentView: View {
     @State private var exportingVoice: SysExDocument?
     @State private var errorMessage: String?
     @State private var typist = ComputerKeyboard()
+    @State private var library = BankLibrary()
     @State private var editingName = false
     @Environment(\.scenePhase) private var scenePhase
     /// The keyboard can collapse to a movable corner button so the editor gets the height.
@@ -33,6 +34,13 @@ struct ContentView: View {
     #else
     private var landscapePhone: Bool { false }
     #endif
+
+    private var shortcutActions: ShortcutActions {
+        ShortcutActions(
+            toggleOperator: { engine.operatorEnabled[$0 - 1].toggle() },
+            focusOperator: { selectedOperator = $0; tab = .operators },
+            show: { tab = $0 })
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,7 +60,7 @@ struct ContentView: View {
                     switch tab {
                     case .voice: VoiceView(selectedOperator: $selectedOperator)
                     case .operators: OperatorsView(selectedOperator: $selectedOperator)
-                    case .bank: BankView(showTab: $tab)
+                    case .bank: BankView(showTab: $tab, library: library)
                     }
                 }
                 .padding(.horizontal, 16).padding(.bottom, 12)
@@ -115,6 +123,7 @@ struct ContentView: View {
                       document: exportingBank, contentType: .sysex, defaultFilename: "\(engine.bankName).syx") { _ in }
         .fileExporter(isPresented: Binding(get: { exportingVoice != nil }, set: { if !$0 { exportingVoice = nil } }),
                       document: exportingVoice, contentType: .sysex, defaultFilename: "\(engine.patch.name).syx") { _ in }
+        .focusedSceneValue(\.shortcutActions, shortcutActions)
         .alert("Couldn't open file", isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(errorMessage ?? "") }
@@ -252,6 +261,16 @@ private struct HeaderView: View {
                        isOn: Binding(get: { engine.sendsMIDI }, set: { engine.sendsMIDI = $0 }))
                 Toggle("Play Sound on This Device", systemImage: "speaker.wave.2",
                        isOn: Binding(get: { engine.playsLocalSound }, set: { engine.playsLocalSound = $0 }))
+                Menu("MIDI Mapping", systemImage: "slider.horizontal.3") {
+                    Toggle("MIDI Learn Mode", systemImage: "hand.tap",
+                           isOn: Binding(get: { engine.midiLearnMode }, set: { engine.midiLearnMode = $0 }))
+                    Text("Tap a knob, then move a knob on your controller.")
+                    Button("Remove All Mappings (\(engine.midiMapping.count))", systemImage: "trash", role: .destructive) {
+                        engine.removeAllMappings()
+                    }
+                    .disabled(engine.midiMapping.isEmpty)
+                }
+                dx7Menu
                 Divider()
             }
             Button("Panic (all notes off)", systemImage: "speaker.slash") { engine.panic() }
@@ -261,6 +280,36 @@ private struct HeaderView: View {
         .menuStyle(.button)
         .buttonStyle(.plain)
         .accessibilityLabel("Menu")
+    }
+
+    /// Talk to a real DX7 (or any device that speaks Yamaha SysEx) through a MIDI output port.
+    private var dx7Menu: some View {
+        Menu("DX7 SysEx", systemImage: "arrow.left.arrow.right") {
+            let ports = engine.sysexDestinations()
+            Picker("Send To", selection: Binding(get: { engine.sysexDestinationID }, set: { engine.sysexDestinationID = $0 })) {
+                Text("No Port").tag(Int32?.none)
+                ForEach(ports) { Text($0.name).tag(Int32?.some($0.id)) }
+                if let saved = engine.sysexDestinationID, !ports.contains(where: { $0.id == saved }) {
+                    Text("Saved port (not connected)").tag(Int32?.some(saved))
+                }
+            }
+            Picker("DX7 Channel", selection: Binding(get: { engine.sysexChannel }, set: { engine.sysexChannel = $0 })) {
+                ForEach(0..<16, id: \.self) { Text("Channel \($0 + 1)").tag($0) }
+            }
+            Divider()
+            Button("Send Voice to DX7", systemImage: "square.and.arrow.up") { engine.sendVoiceToDX7() }
+                .disabled(!engine.hasSysExDestination)
+            Button("Send Bank to DX7", systemImage: "square.and.arrow.up.on.square") { engine.sendBankToDX7() }
+                .disabled(!engine.hasSysExDestination)
+            Button("Request Voice from DX7", systemImage: "square.and.arrow.down") { engine.requestVoiceFromDX7() }
+                .disabled(!engine.hasSysExDestination)
+            Button("Request Bank from DX7", systemImage: "square.and.arrow.down.on.square") { engine.requestBankFromDX7() }
+                .disabled(!engine.hasSysExDestination)
+            Toggle("Send Edits to DX7", systemImage: "waveform.path",
+                   isOn: Binding(get: { engine.sendsEditsToDX7 }, set: { engine.sendsEditsToDX7 = $0 }))
+                .disabled(!engine.hasSysExDestination)
+            Text("Dumps and edits arriving on any MIDI input are received automatically.")
+        }
     }
 
     @ViewBuilder
@@ -282,6 +331,7 @@ private struct HeaderView: View {
             Slider(value: volume, in: 0...1)
                 .frame(minWidth: tight ? 60 : 90, maxWidth: tight ? 120 : compact ? .infinity : 110)
                 .accessibilityLabel("Volume")
+                .midiMappable(.volume)
         }
     }
 

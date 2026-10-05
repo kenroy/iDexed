@@ -25,7 +25,11 @@ A native SwiftUI port of [Dexed](https://github.com/asb2m10/dexed), the open-sou
 on-screen keyboard with pitch/mod wheels, typing-keyboard and MIDI input, MIDI out (virtual source "iDexed") with
 optional local-sound mute, output filter, master tune, Scala `.scl`/`.kbm` microtuning, AUv3 plug-in (macOS, iOS, iPadOS).
 
-Not ported: MTS-ESP, MPE, Dexed's cartridge manager and parameter-mapping dialogs.
+Also: MIDI CC mapping with MIDI learn, hardware DX7 SysEx send/receive (voice, bank and live edits), a cartridge manager
+(browse a folder of banks and drag voices into the current bank), MPE per-note pitch bend, and Mac shortcuts
+(⌃1–6 show an operator, ⌃⇧1–6 toggle it, ⌃G / ⌃P / ⌃L switch sections).
+
+Not ported: MTS-ESP (it needs ODDSound's proprietary client library).
 
 ## License
 GPL v3 (derived from Dexed). msfa engine files are Apache-2.0 (Google / Pascal Gauthier). See `LICENSE`.

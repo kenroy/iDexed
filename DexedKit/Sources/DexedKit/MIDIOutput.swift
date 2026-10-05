@@ -35,6 +35,13 @@ public final class MIDIOutput: @unchecked Sendable {
     public func programChange(_ program: Int, channel: Int = 1) { send(0xC0, channel, program, 0) }
     public func allNotesOff(channel: Int = 1) { controlChange(123, 0, channel: channel) }
 
+    /// Sends a complete system-exclusive message (with or without F0/F7) through the virtual source.
+    public func sendSysEx(_ message: Data) {
+        guard started, source != 0 else { return }
+        let target = source
+        UMPSysEx.sendWords(UMPSysEx.words(for: message)) { MIDIReceivedEventList(target, $0) }
+    }
+
     private func send(_ status: UInt32, _ channel: Int, _ d1: Int, _ d2: Int) {
         guard started, source != 0 else { return }
         // UMP "MIDI 1.0 channel voice" word: message type 2, group 0.

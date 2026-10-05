@@ -33,6 +33,10 @@ void dexed_set_param(DexedSynth *s, int offset, int value);
 void dexed_note_on(DexedSynth *s, int channel, int note, int velocity);
 void dexed_note_off(DexedSynth *s, int channel, int note);
 void dexed_pitch_bend(DexedSynth *s, int value14bit);
+// MPE: with MPE on, pitch bend on channels 2…16 bends only the note playing on that channel, and channel 1 stays global.
+// Without MPE every pitch bend is global. `range` is the per-note bend range in semitones.
+void dexed_pitch_bend_channel(DexedSynth *s, int channel, int value14bit);
+void dexed_set_mpe(DexedSynth *s, bool enabled, int range);
 void dexed_control_change(DexedSynth *s, int cc, int value);
 void dexed_aftertouch(DexedSynth *s, int value);
 void dexed_panic(DexedSynth *s);

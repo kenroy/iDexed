@@ -1,14 +1,23 @@
 import SwiftUI
 import DexedKit
 
+/// The Bank tab: the current bank (32 slots) next to the bank browser.
 struct BankView: View {
     @Environment(SynthEngine.self) private var engine
     @Binding var showTab: Tab
+    var library: BankLibrary
 
     var body: some View {
+        MasonryLayout(minColumnWidth: 380, spacing: 12) {
+            currentBank
+            LibraryPanel(library: library)
+        }
+    }
+
+    private var currentBank: some View {
         let names = engine.bank.names
-        Panel(title: engine.bankName) {
-            LazyVStack(spacing: 0) {
+        return Panel(title: "Current Bank · \(engine.bankName)") {
+            VStack(spacing: 0) {
                 ForEach(names.indices, id: \.self) { i in
                     Button {
                         engine.selectProgram(i)
@@ -26,6 +35,12 @@ struct BankView: View {
                         .background(i == engine.programIndex ? Theme.accent.opacity(0.12) : .clear, in: RoundedRectangle(cornerRadius: 8))
                     }
                     .buttonStyle(.plain)
+                    // Drop a voice from the browser onto this slot to replace it.
+                    .dropDestination(for: VoicePayload.self) { items, _ in
+                        guard let voice = items.first else { return false }
+                        engine.replaceVoice(at: i, with: voice.patch)
+                        return true
+                    }
                     Divider().opacity(0.3)
                 }
             }

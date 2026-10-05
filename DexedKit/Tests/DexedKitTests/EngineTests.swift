@@ -619,6 +619,170 @@ import AudioToolbox
         }
     }
 
+    /// A virtual MIDI destination that collects the SysEx messages sent to it, standing in for a real DX7.
+    final class LoopbackDestination: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _messages: [Data] = []
+        private var assembler = SysExAssembler()
+        private var client = MIDIClientRef()
+        private var endpoint = MIDIEndpointRef()
+        private(set) var uniqueID: Int32 = 0
+
+        var messages: [Data] { lock.lock(); defer { lock.unlock() }; return _messages }
+
+        init(name: String) {
+            var uid: Int32 = 0
+            MIDIClientCreateWithBlock("loopback" as CFString, &client) { _ in }
+            // The handler is set after creation so it can capture `self`.
+            var created = MIDIEndpointRef()
+            MIDIDestinationCreateWithProtocol(client, name as CFString, ._1_0, &created) { [unowned self] list, _ in
+                for packet in list.unsafeSequence() {
+                    let count = Int(packet.pointee.wordCount)
+                    let w = (UnsafeRawPointer(packet) + MemoryLayout<MIDIEventPacket>.offset(of: \.words)!).assumingMemoryBound(to: UInt32.self)
+                    var i = 0
+                    while i < count {
+                        let type = w[i] >> 28
+                        if type == 3, i + 1 < count {
+                            lock.lock()
+                            if let m = assembler.consume(w[i], w[i + 1]) { _messages.append(m) }
+                            lock.unlock()
+                        }
+                        i += UMPSysEx.wordCount(forType: type)
+                    }
+                }
+            }
+            endpoint = created
+            MIDIObjectGetIntegerProperty(endpoint, kMIDIPropertyUniqueID, &uid)
+            uniqueID = uid
+        }
+
+        deinit { MIDIEndpointDispose(endpoint); MIDIClientDispose(client) }
+    }
+
+    @Suite(.serialized) struct DX7SysExEngineTests {
+        /// Runs a test with a clean slate of saved settings and restores them afterwards.
+        @MainActor static func withEngine(_ body: (SynthEngine) async throws -> Void) async rethrows {
+            let d = UserDefaults.standard
+            let keys = ["sysexDestination", "sysexChannel", "sendsEditsToDX7"]
+            let saved = keys.map { d.object(forKey: $0) }
+            keys.forEach(d.removeObject(forKey:))
+            defer { for (k, v) in zip(keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } } }
+            try await body(SynthEngine())
+        }
+
+        @Test @MainActor func incomingDumpsAndEditsChangeTheVoice() async {
+            await Self.withEngine { engine in
+                // single-voice dump
+                var p = Patch.initVoice; p.name = "FROM DX7"; p.algorithm = 9
+                engine.handleSysEx(Cartridge.singleVoiceSysex(p))
+                #expect(engine.patch.name == "FROM DX7")
+                #expect(engine.patch.algorithm == 9)
+
+                // bank dump
+                var bank = Cartridge(); var q = Patch.initVoice; q.name = "BANKED"
+                bank.setPatch(q, at: 0)
+                engine.handleSysEx(bank.sysexData())
+                #expect(engine.bankName == "DX7 Dump")
+                #expect(engine.patch.name == "BANKED")
+
+                // parameter change, clamped to the parameter's range
+                engine.handleSysEx(SysExMessage.parameterChange(channel: 0, offset: 134, value: 21))
+                #expect(engine.patch.algorithm == 21)
+                let levelOffset = Patch.offset(op: 0, .outputLevel)
+                engine.handleSysEx(SysExMessage.parameterChange(channel: 0, offset: levelOffset, value: 127))
+                #expect(engine.patch[levelOffset] == 99)
+
+                // operator switches: bit 0 = OP6 … bit 5 = OP1
+                engine.handleSysEx(SysExMessage.parameterChange(channel: 0, offset: 155, value: 0b000011))
+                #expect(engine.operatorEnabled == [false, false, false, false, true, true])
+                engine.handleSysEx(SysExMessage.parameterChange(channel: 0, offset: 155, value: 0b111111))
+                #expect(engine.operatorEnabled == [Bool](repeating: true, count: 6))
+
+                // garbage is ignored
+                let before = engine.patch
+                engine.handleSysEx(Data([0xF0, 0x7E, 0x00, 0xF7]))
+                #expect(engine.patch == before)
+            }
+        }
+
+        @Test @MainActor func outgoingMessagesReachTheChosenDestination() async throws {
+            try await Self.withEngine { engine in
+                let dx7 = LoopbackDestination(name: "Fake DX7")
+                #expect(!engine.hasSysExDestination)
+                engine.sendVoiceToDX7()                                    // no destination yet: nothing happens
+                engine.sysexDestinationID = dx7.uniqueID
+                engine.sysexChannel = 2
+
+                var p = Patch.initVoice; p.name = "TO DX7"; p.algorithm = 3
+                engine.load(patch: p)
+                engine.sendVoiceToDX7()
+                engine.requestVoiceFromDX7()
+                engine.sendsEditsToDX7 = true
+                engine.setParameter(134, 17)
+                engine.operatorEnabled[0] = false                          // OP1 off: bit 5 clear → 0b011111
+                try await Task.sleep(for: .seconds(2.5))
+
+                let got = dx7.messages
+                #expect(got.count == 4, "got \(got.map(\.count))")
+                #expect(got.first == Cartridge.singleVoiceSysex(p, channel: 2))
+                #expect(got.dropFirst().first == SysExMessage.request(channel: 2, .voice))
+                #expect(got.dropFirst(2).first == SysExMessage.parameterChange(channel: 2, offset: 134, value: 17))
+                #expect(got.last == SysExMessage.parameterChange(channel: 2, offset: 155, value: 0b011111))
+            }
+        }
+
+        @Test @MainActor func aRequestFromTheDX7IsAnsweredWithTheCurrentVoiceOrBank() async throws {
+            try await Self.withEngine { engine in
+                let dx7 = LoopbackDestination(name: "Fake DX7 2")
+                engine.sysexDestinationID = dx7.uniqueID
+                engine.sysexChannel = 0
+                var p = Patch.initVoice; p.name = "ASKED"
+                engine.load(patch: p)
+                engine.handleSysEx(SysExMessage.request(channel: 0, .voice))
+                engine.handleSysEx(SysExMessage.request(channel: 0, .bank))
+                try await Task.sleep(for: .seconds(3.5))
+                let got = dx7.messages
+                #expect(got.count == 2)
+                #expect(got.first == Cartridge.singleVoiceSysex(p, channel: 0))
+                #expect(got.last?.count == 4104)
+            }
+        }
+    }
+
+    @Suite struct MPETests {
+        func hz(_ core: SynthCore) -> Double {
+            _ = core.render(frames: 2400)
+            let out = core.render(frames: 48000)
+            var c = 0
+            for i in 1..<out.count where (out[i - 1] < 0) != (out[i] < 0) { c += 1 }
+            return Double(c) / 2
+        }
+
+        @Test func memberChannelBendsOnlyItsOwnNote() {
+            let core = SynthCore(sampleRate: 48000)
+            core.setMPE(enabled: true, range: 24)
+            core.noteOn(69, velocity: 100, channel: 2)
+            core.pitchBend(16383, channel: 2)      // +24 semitones at full deflection
+            let f = hz(core)
+            #expect(abs(f - 440 * 4) < 40, "f=\(f)")
+        }
+
+        @Test func withoutMPEEveryChannelBendsGlobally() {
+            let core = SynthCore(sampleRate: 48000)
+            core.noteOn(69, velocity: 100, channel: 2)
+            core.pitchBend(16383, channel: 2)
+            #expect(abs(hz(core) - 440 * pow(2, 3.0 / 12)) < 10)
+        }
+
+        @Test func masterChannelBendIsGlobalEvenInMPE() {
+            let core = SynthCore(sampleRate: 48000)
+            core.setMPE(enabled: true, range: 24)
+            core.noteOn(69, velocity: 100, channel: 2)
+            core.pitchBend(16383, channel: 1)
+            #expect(abs(hz(core) - 440 * pow(2, 3.0 / 12)) < 10)
+        }
+    }
+
     @Suite struct WheelTests {
         func crossingsPerSecond(_ core: SynthCore, note: Int, bend: Int? = nil) -> Double {
             if let bend { core.pitchBend(bend) }
@@ -668,6 +832,283 @@ import AudioToolbox
             #expect(engine.routing(.aftertouch).pitch)
             #expect(engine.routing(.foot).amp)
             #expect(engine.routing(.breath).amp)
+        }
+    }
+}
+
+extension AllEngineTests {
+    @Suite struct MIDIMappingTests {
+        @Test func scalingMatchesEachControlsRange() {
+            #expect(MappableControl.voice(Patch.offset(op: 0, .outputLevel)).scaled(127) == 99)
+            #expect(MappableControl.voice(Patch.offset(op: 0, .outputLevel)).scaled(0) == 0)
+            #expect(MappableControl.voice(134).scaled(127) == 31)          // algorithm
+            #expect(MappableControl.voice(135).scaled(127) == 7)           // feedback
+            #expect(MappableControl.voice(Patch.offset(op: 2, .leftCurve)).scaled(127) == 3)
+            #expect(MappableControl.cutoff.scaled(127) == 1)
+            #expect(abs(MappableControl.cutoff.scaled(64) - 64.0 / 127) < 1e-9)
+            #expect(MappableControl.voice(134).scaled(500) == 31)          // out-of-range input is clamped
+        }
+
+        @Test func everyNumericParameterHasARangeAndAName() {
+            for offset in 0...144 {
+                #expect(Parameters.maxValue(offset: offset) != nil, "offset \\(offset)")
+                #expect(!Parameters.name(offset: offset).contains("?"), "offset \\(offset)")
+            }
+            #expect(Parameters.maxValue(offset: 145) == nil)               // the voice name isn't mappable
+            #expect(Parameters.name(offset: Patch.offset(op: 2, .outputLevel)) == "OP3 Level")
+        }
+
+        @Test func aControllerAndAControlEachHaveOneAssignment() {
+            var m = MIDIMapping()
+            m.assign(.cutoff, to: .init(channel: 1, cc: 74))
+            m.assign(.resonance, to: .init(channel: 1, cc: 71))
+            m.assign(.volume, to: .init(channel: 1, cc: 74))               // takes CC 74 away from cutoff
+            #expect(m.control(for: .init(channel: 1, cc: 74)) == .volume)
+            #expect(m.key(for: .cutoff) == nil)
+            m.assign(.resonance, to: .init(channel: 2, cc: 9))             // moves resonance to another controller
+            #expect(m.key(for: .resonance) == .init(channel: 2, cc: 9))
+            #expect(m.control(for: .init(channel: 1, cc: 71)) == nil)
+            #expect(m.count == 2)
+        }
+
+        @Test func mappingSurvivesSavingAndLoading() throws {
+            var m = MIDIMapping()
+            m.assign(.voice(Patch.offset(op: 5, .outputLevel)), to: .init(channel: 3, cc: 20))
+            m.assign(.masterTune, to: .init(channel: 1, cc: 21))
+            let back = try JSONDecoder().decode(MIDIMapping.self, from: JSONEncoder().encode(m))
+            #expect(back == m)
+        }
+
+        @Test func reservedControllersCannotBeMapped() {
+            for cc in [1, 2, 4, 5, 64, 65, 120, 123, 127] { #expect(ReservedCC.isReserved(cc), "cc \\(cc)") }
+            for cc in [3, 7, 10, 21, 74, 119] { #expect(!ReservedCC.isReserved(cc), "cc \\(cc)") }
+        }
+
+        @Test @MainActor func learnThenControl() {
+            let defaults = UserDefaults.standard
+            let saved = defaults.data(forKey: "midiMapping")
+            defer { if let saved { defaults.set(saved, forKey: "midiMapping") } else { defaults.removeObject(forKey: "midiMapping") } }
+            defaults.removeObject(forKey: "midiMapping")
+
+            let engine = SynthEngine(hosted: HostedSession())
+            let level = MappableControl.voice(Patch.offset(op: 0, .outputLevel))
+
+            // Not learning and nothing mapped: ignored.
+            #expect(!engine.handleController(channel: 1, cc: 21, value: 100))
+
+            // A reserved controller is ignored even while learning.
+            engine.beginLearning(level)
+            #expect(!engine.handleController(channel: 1, cc: 64, value: 127))
+            #expect(engine.learningControl == level)
+
+            // The next real controller is learned and applied immediately.
+            #expect(engine.handleController(channel: 1, cc: 21, value: 127))
+            #expect(engine.learningControl == nil)
+            #expect(engine.mappedController(for: level) == .init(channel: 1, cc: 21))
+            #expect(engine.patch[op: 0, field: .outputLevel] == 99)
+
+            // From now on that controller drives the parameter.
+            #expect(engine.handleController(channel: 1, cc: 21, value: 0))
+            #expect(engine.patch[op: 0, field: .outputLevel] == 0)
+            #expect(!engine.handleController(channel: 2, cc: 21, value: 50))      // other channel: not mapped
+
+            // Global controls work too, and mappings can be removed.
+            engine.beginLearning(.cutoff)
+            engine.handleController(channel: 1, cc: 74, value: 127)
+            engine.handleController(channel: 1, cc: 74, value: 64)
+            #expect(abs(engine.filterCutoff - 64.0 / 127) < 1e-9)
+            engine.removeMapping(for: .cutoff)
+            #expect(!engine.handleController(channel: 1, cc: 74, value: 10))
+            engine.removeAllMappings()
+            #expect(engine.mappedController(for: level) == nil)
+        }
+    }
+}
+
+extension AllEngineTests {
+    @Suite struct SysExFormatTests {
+        @Test func ump_roundTripsMessagesOfEveryLength() {
+            for length in [0, 1, 5, 6, 7, 11, 12, 13, 18, 100, 4102] {
+                let payload = (0..<length).map { UInt8($0 % 128) }
+                let message = Data([0xF0] + payload + [0xF7])
+                let words = UMPSysEx.words(for: message)
+                #expect(words.count % 2 == 0)
+                var assembler = SysExAssembler()
+                var out: [Data] = []
+                for i in stride(from: 0, to: words.count, by: 2) { if let m = assembler.consume(words[i], words[i + 1]) { out.append(m) } }
+                #expect(out == [message], "length \(length)")
+            }
+        }
+
+        @Test func ump_acceptsMessagesWithoutFramingBytes() {
+            let words = UMPSysEx.words(for: Data([0x43, 0x10, 0x00]))
+            var assembler = SysExAssembler()
+            #expect(assembler.consume(words[0], words[1]) == Data([0xF0, 0x43, 0x10, 0x00, 0xF7]))
+        }
+
+        @Test func assembler_ignoresStrayContinuations() {
+            var assembler = SysExAssembler()
+            #expect(assembler.consume(0x3 << 28 | 2 << 20 | 2 << 16 | 0x0102, 0) == nil)      // "continue" with no start
+            #expect(assembler.consume(0x3 << 28 | 3 << 20 | 1 << 16 | 0x0100, 0) == nil)      // "end" with no start
+        }
+
+        @Test func voiceDumpRoundTrips() throws {
+            var p = Patch.initVoice
+            p.name = "DX DUMP"; p.algorithm = 17; p[op: 1, field: .outputLevel] = 77
+            let message = try #require(SysExMessage.parse(Cartridge.singleVoiceSysex(p)))
+            guard case .voice(let parsed, let ok) = message else { Issue.record("not a voice"); return }
+            #expect(parsed.bytes.prefix(155) == p.bytes.prefix(155))
+            #expect(ok)
+        }
+
+        @Test func bankDumpRoundTrips() throws {
+            var bank = Cartridge()
+            var p = Patch.initVoice; p.name = "SLOT 9"
+            bank.setPatch(p, at: 8)
+            let message = try #require(SysExMessage.parse(bank.sysexData()))
+            guard case .bank(let parsed) = message else { Issue.record("not a bank"); return }
+            #expect(parsed.names[8] == "SLOT 9")
+        }
+
+        @Test func parameterChangesAndRequests() {
+            let change = SysExMessage.parameterChange(channel: 2, offset: 134, value: 21)
+            #expect([UInt8](change) == [0xF0, 0x43, 0x12, 1, 6, 21, 0xF7])        // offset 134 = 1<<7 + 6
+            #expect(SysExMessage.parse(change) == .parameterChange(offset: 134, value: 21))
+            #expect(SysExMessage.parse(SysExMessage.parameterChange(channel: 0, offset: 155, value: 0x3F)) == .parameterChange(offset: 155, value: 63))
+            #expect(SysExMessage.parse(Data([0xF0, 0x43, 0x10, 2, 0, 5, 0xF7])) == nil)       // offset 256: out of range
+            #expect(SysExMessage.parse(SysExMessage.request(channel: 0, .voice)) == .request(.voice))
+            #expect(SysExMessage.parse(SysExMessage.request(channel: 3, .bank)) == .request(.bank))
+        }
+
+        @Test func foreignAndTruncatedMessagesAreIgnored() {
+            #expect(SysExMessage.parse(Data([0xF0, 0x41, 0x10, 0, 0xF7])) == nil)             // not Yamaha
+            #expect(SysExMessage.parse(Data([0xF0, 0x43])) == nil)
+            #expect(SysExMessage.parse(Data([0xF0, 0x43, 0x00, 0x09, 0x20, 0x00, 0xF7])) == nil)   // bank header, no body
+        }
+    }
+}
+
+extension AllEngineTests {
+    @Suite(.serialized) struct SysExTransportTests {
+        final class Inbox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var _messages: [Data] = []
+            var messages: [Data] { lock.lock(); defer { lock.unlock() }; return _messages }
+            func add(_ m: Data) { lock.lock(); _messages.append(m); lock.unlock() }
+        }
+
+        @Test func aBankSentToADestinationArrivesIntact() async throws {
+            var client = MIDIClientRef()
+            MIDIClientCreateWithBlock("test" as CFString, &client) { _ in }
+            let inbox = Inbox()
+            var assembler = SysExAssembler()
+            var destination = MIDIEndpointRef()
+            MIDIDestinationCreateWithProtocol(client, "iDexed Test Destination" as CFString, ._1_0, &destination) { list, _ in
+                for packet in list.unsafeSequence() {
+                    let count = Int(packet.pointee.wordCount)
+                    let w = (UnsafeRawPointer(packet) + MemoryLayout<MIDIEventPacket>.offset(of: \.words)!).assumingMemoryBound(to: UInt32.self)
+                    var i = 0
+                    while i < count {
+                        let type = w[i] >> 28
+                        if type == 3, i + 1 < count, let m = assembler.consume(w[i], w[i + 1]) { inbox.add(m) }
+                        i += UMPSysEx.wordCount(forType: type)
+                    }
+                }
+            }
+            defer { MIDIEndpointDispose(destination); MIDIClientDispose(client) }
+
+            var uid: Int32 = 0
+            MIDIObjectGetIntegerProperty(destination, kMIDIPropertyUniqueID, &uid)
+            #expect(MIDISysExSender.destinations().contains { $0.id == uid && $0.name.contains("iDexed Test Destination") })
+
+            var bank = Cartridge()
+            var p = Patch.initVoice; p.name = "OVER WIRE"
+            bank.setPatch(p, at: 11)
+            let sender = MIDISysExSender()
+            #expect(sender.send(bank.sysexData(), to: uid))
+            #expect(sender.send(Cartridge.singleVoiceSysex(p), to: uid))
+            #expect(!sender.send(Data([0xF0, 0x43, 0xF7]), to: 123_456_789))       // unknown destination
+            // CoreMIDI paces SysEx at real MIDI speed (31,250 baud): a bank alone takes about 1.3 s.
+            try await Task.sleep(for: .seconds(4))
+
+            let got = inbox.messages
+            #expect(got.count == 2)
+            #expect(got.first == bank.sysexData())
+            #expect(got.last == Cartridge.singleVoiceSysex(p))
+        }
+
+        @Test func sysexSentOnTheVirtualSourceIsReceivedByTheInput() async throws {
+            let out = MIDIOutput()
+            out.start()
+            let inbox = Inbox()
+            let input = MIDIInput()
+            input.ignoredSources = []
+            input.onSysEx = { inbox.add($0) }
+            input.start()
+            try await Task.sleep(for: .milliseconds(300))
+            let message = SysExMessage.parameterChange(channel: 0, offset: 134, value: 12)
+            out.sendSysEx(message)
+            out.sendSysEx(Cartridge().sysexData())
+            try await Task.sleep(for: .milliseconds(800))
+            #expect(inbox.messages.first == message)
+            #expect(inbox.messages.count == 2)
+            #expect(inbox.messages.last?.count == 4104)
+            out.stop()
+        }
+    }
+}
+
+extension AllEngineTests {
+    @Suite struct BankBrowserTests {
+        @Test func scanFindsSyxFilesRecursivelyAndSortsThem() throws {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent("iDexedBanks-\(UUID().uuidString)")
+            let sub = root.appendingPathComponent("Yamaha/DX7II")
+            try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+
+            try Cartridge().sysexData().write(to: root.appendingPathComponent("Bank_10.syx"))
+            try Cartridge().sysexData().write(to: root.appendingPathComponent("Bank_2.SYX"))        // extension is case-insensitive
+            try Cartridge().sysexData().write(to: sub.appendingPathComponent("Rom1a.syx"))
+            try Data("not a bank".utf8).write(to: root.appendingPathComponent("notes.txt"))
+            try Data([1, 2, 3]).write(to: root.appendingPathComponent(".hidden.syx"))               // hidden files are skipped
+
+            let found = BankFolder.scan(root)
+            #expect(found.map(\.name) == ["Bank 2", "Bank 10", "Rom1a"])         // natural sort, top level before sub-folders
+            #expect(found.map(\.folder) == ["", "", "Yamaha/DX7II"])
+            #expect(BankFolder.scan(root, limit: 1).count == 1)
+            #expect(BankFolder.scan(root.appendingPathComponent("missing")).isEmpty)
+        }
+
+        @Test func loadReadsBanksAndSingleVoicesAndRejectsJunk() throws {
+            let dir = FileManager.default.temporaryDirectory
+            var bank = Cartridge(); var p = Patch.initVoice; p.name = "IN FILE"
+            bank.setPatch(p, at: 4)
+            let bankURL = dir.appendingPathComponent("test-bank-\(UUID().uuidString).syx")
+            let voiceURL = dir.appendingPathComponent("test-voice-\(UUID().uuidString).syx")
+            let junkURL = dir.appendingPathComponent("test-junk-\(UUID().uuidString).syx")
+            defer { [bankURL, voiceURL, junkURL].forEach { try? FileManager.default.removeItem(at: $0) } }
+            try bank.sysexData().write(to: bankURL)
+            try Cartridge.singleVoiceSysex(p).write(to: voiceURL)
+            try Data("junk".utf8).write(to: junkURL)
+
+            #expect(try BankFolder.load(bankURL).names[4] == "IN FILE")
+            #expect(try BankFolder.load(voiceURL).names[0] == "IN FILE")        // a single voice lands in slot 1
+            #expect(throws: (any Error).self) { try BankFolder.load(junkURL) }
+        }
+
+        @Test @MainActor func replacingASlotUpdatesTheBankAndTheLoadedVoice() {
+            let engine = SynthEngine(hosted: HostedSession())
+            var voice = Patch.initVoice; voice.name = "DROPPED"; voice.algorithm = 5
+            engine.selectProgram(3)
+            engine.replaceVoice(at: 7, with: voice)                              // another slot: the played voice is unchanged
+            #expect(engine.bank.names[7] == "DROPPED")
+            #expect(engine.programIndex == 3)
+            #expect(engine.patch.name != "DROPPED")
+            engine.replaceVoice(at: 3, with: voice)                              // the played slot: reload it
+            #expect(engine.patch.name == "DROPPED")
+            #expect(engine.patch.algorithm == 5)
+            engine.replaceVoice(at: 99, with: voice)                             // out of range: ignored
+            #expect(engine.bank.names.filter { $0 == "DROPPED" }.count == 2)
         }
     }
 }

@@ -20,7 +20,7 @@ public final class SynthEngine {
 
     public var engineType: EngineType = .markI { didSet { core.setEngine(engineType); syncToHost() } }
     public var monoMode = false { didSet { core.setMono(monoMode) } }
-    public var operatorEnabled = [Bool](repeating: true, count: 6) { didSet { core.setOperatorMask(opMask) } }
+    public var operatorEnabled = [Bool](repeating: true, count: 6) { didSet { core.setOperatorMask(opMask); sendEditToDX7(offset: 155, value: opMask) } }
     public var masterVolume: Float = 1.0 { didSet { audio?.mainMixerNode.outputVolume = masterVolume; syncToHost() } }
     /// Publish played notes as a virtual MIDI source ("iDexed") for other devices/apps.
     public var sendsMIDI: Bool = UserDefaults.standard.object(forKey: "sendsMIDI") as? Bool ?? true {
@@ -71,6 +71,16 @@ public final class SynthEngine {
         didSet { UserDefaults.standard.set(normalizeVelocity, forKey: "normalizeVelocity"); applyControllerSettings() }
     }
 
+    /// MPE: pitch bend on MIDI channels 2…16 bends only the note on that channel. Turns itself off if a second
+    /// note arrives on one channel (a sign the controller isn't MPE), as Dexed does.
+    public var mpeEnabled: Bool = UserDefaults.standard.object(forKey: "mpeEnabled") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(mpeEnabled, forKey: "mpeEnabled"); applyControllerSettings() }
+    }
+    /// Per-note bend range in semitones (MPE default is 24).
+    public var mpeBendRange: Int = UserDefaults.standard.object(forKey: "mpeBendRange") as? Int ?? 24 {
+        didSet { UserDefaults.standard.set(mpeBendRange, forKey: "mpeBendRange"); applyControllerSettings() }
+    }
+
     public func routing(_ source: ModSource) -> ControllerRouting {
         controllerRouting[source] ?? ControllerRouting.defaults[source] ?? ControllerRouting(range: 0)
     }
@@ -83,6 +93,7 @@ public final class SynthEngine {
         core.setPitchRange(up: pitchBendUp, down: pitchBendDown, step: pitchBendStep)
         core.setPortamento(time: Int((Float(portamentoTime) * 127 / 100).rounded()), glissando: glissando)   // Dexed's 0–99 → 0–127
         core.setNormalizeVelocity(normalizeVelocity)
+        core.setMPE(enabled: mpeEnabled, range: mpeBendRange)
     }
 
     private static func loadRouting() -> [ModSource: ControllerRouting] {
@@ -98,6 +109,146 @@ public final class SynthEngine {
     /// Wheel positions for the on-screen controllers (pitch bend centre = 8192).
     public private(set) var pitchBendValue = 8192
     public private(set) var modWheelValue = 0
+
+    // MARK: Hardware DX7 SysEx
+
+    /// The MIDI output that voice/bank dumps and edits go to (a DX7's interface, for example). Saved between launches.
+    public var sysexDestinationID: Int32? = {
+        let v = UserDefaults.standard.object(forKey: "sysexDestination") as? Int
+        return v.map { Int32(truncatingIfNeeded: $0) }
+    }() {
+        didSet { UserDefaults.standard.set(sysexDestinationID.map { Int($0) }, forKey: "sysexDestination") }
+    }
+    /// The DX7's MIDI channel (0…15; shown to the user as 1…16).
+    public var sysexChannel: Int = UserDefaults.standard.object(forKey: "sysexChannel") as? Int ?? 0 {
+        didSet { UserDefaults.standard.set(sysexChannel, forKey: "sysexChannel") }
+    }
+    /// Mirror every edit to the DX7 as a parameter-change message.
+    public var sendsEditsToDX7: Bool = UserDefaults.standard.object(forKey: "sendsEditsToDX7") as? Bool ?? false {
+        didSet { UserDefaults.standard.set(sendsEditsToDX7, forKey: "sendsEditsToDX7") }
+    }
+    private let sysexSender = MIDISysExSender()
+    private var applyingIncomingSysEx = false
+
+    public func sysexDestinations() -> [MIDIPortInfo] { MIDISysExSender.destinations() }
+    public var hasSysExDestination: Bool { sysexDestinationID != nil }
+
+    @discardableResult
+    private func sendSysEx(_ data: Data) -> Bool {
+        guard hosted == nil, let id = sysexDestinationID else { return false }
+        return sysexSender.send(data, to: id)
+    }
+
+    public func sendVoiceToDX7() {
+        sendSysEx(Cartridge.singleVoiceSysex(patch, channel: sysexChannel))
+    }
+
+    public func sendBankToDX7() {
+        storeCurrentPatch()
+        var data = [UInt8](bank.sysexData())
+        data[2] |= UInt8(sysexChannel & 0x0F)
+        sendSysEx(Data(data))
+    }
+
+    public func requestVoiceFromDX7() { sendSysEx(SysExMessage.request(channel: sysexChannel, .voice)) }
+    public func requestBankFromDX7() { sendSysEx(SysExMessage.request(channel: sysexChannel, .bank)) }
+
+    private func sendEditToDX7(offset: Int, value: Int) {
+        guard sendsEditsToDX7, !applyingIncomingSysEx else { return }
+        sendSysEx(SysExMessage.parameterChange(channel: sysexChannel, offset: offset, value: value))
+    }
+
+    /// Handles a complete SysEx message from a MIDI input: voice and bank dumps load, parameter changes edit the voice,
+    /// and requests are answered with the current voice or bank (as Dexed does).
+    public func handleSysEx(_ data: Data) {
+        guard let message = SysExMessage.parse(data) else { return }
+        applyingIncomingSysEx = true
+        defer { applyingIncomingSysEx = false }
+        switch message {
+        case .voice(let received, _):
+            core.panic()
+            activeNotes.removeAll()
+            operatorEnabled = [Bool](repeating: true, count: 6)         // a dump resets the operator switches, as on a DX7
+            load(patch: received)
+        case .bank(let received):
+            load(bank: received, name: "DX7 Dump")
+        case .parameterChange(let offset, let value):
+            if offset == 155 {
+                // Bit 0 = OP6 … bit 5 = OP1; our array is OP1 first.
+                operatorEnabled = (0..<6).map { (value >> (5 - $0)) & 1 == 1 }
+            } else if let limit = Parameters.maxValue(offset: offset) {
+                setParameter(offset, min(value, limit))
+            }
+        case .request(let kind):
+            applyingIncomingSysEx = false
+            kind == .voice ? sendVoiceToDX7() : sendBankToDX7()
+        }
+    }
+
+    // MARK: MIDI CC mapping ("MIDI learn")
+
+    /// Which MIDI controller drives which control. Saved between launches.
+    public private(set) var midiMapping: MIDIMapping = SynthEngine.loadMapping()
+    /// While set, the next mappable controller received is assigned to this control.
+    public private(set) var learningControl: MappableControl?
+
+    /// While on, tapping a mappable knob selects it for learning instead of changing its value (handy on touch screens).
+    public var midiLearnMode = false { didSet { if !midiLearnMode { learningControl = nil } } }
+
+    public func beginLearning(_ control: MappableControl) { learningControl = control }
+    public func cancelLearning() { learningControl = nil }
+    public func toggleLearning(_ control: MappableControl) { learningControl = learningControl == control ? nil : control }
+
+    public func mappedController(for control: MappableControl) -> MIDIControllerKey? { midiMapping.key(for: control) }
+
+    public func removeMapping(for control: MappableControl) {
+        midiMapping.remove(control)
+        SynthEngine.saveMapping(midiMapping)
+    }
+
+    public func removeAllMappings() {
+        midiMapping.removeAll()
+        learningControl = nil
+        SynthEngine.saveMapping(midiMapping)
+    }
+
+    /// Handles one incoming controller change. Returns true if it was consumed (learned or applied).
+    @discardableResult
+    public func handleController(channel: Int, cc: Int, value: Int) -> Bool {
+        guard !ReservedCC.isReserved(cc) else { return false }
+        let key = MIDIControllerKey(channel: channel, cc: cc)
+        if let learning = learningControl {
+            midiMapping.assign(learning, to: key)
+            SynthEngine.saveMapping(midiMapping)
+            learningControl = nil
+            apply(learning, from: value)           // jump to the controller's current position, like Dexed
+            return true
+        }
+        guard let control = midiMapping.control(for: key) else { return false }
+        apply(control, from: value)
+        return true
+    }
+
+    private func apply(_ control: MappableControl, from cc: Int) {
+        let v = control.scaled(cc)
+        switch control {
+        case .voice(let offset): setParameter(offset, Int(v))
+        case .cutoff: filterCutoff = v
+        case .resonance: filterResonance = v
+        case .masterTune: masterTune = v
+        case .volume: masterVolume = Float(v)
+        }
+    }
+
+    private static func loadMapping() -> MIDIMapping {
+        guard let data = UserDefaults.standard.data(forKey: "midiMapping"),
+              let saved = try? JSONDecoder().decode(MIDIMapping.self, from: data) else { return MIDIMapping() }
+        return saved
+    }
+
+    private static func saveMapping(_ mapping: MIDIMapping) {
+        if let data = try? JSONEncoder().encode(mapping) { UserDefaults.standard.set(data, forKey: "midiMapping") }
+    }
 
     /// Name of the active microtuning, or nil for standard 12-TET.
     public private(set) var tuningName: String?
@@ -138,7 +289,13 @@ public final class SynthEngine {
             core.handleMIDI(status: status, data1: d1, data2: d2)
             if status & 0xF0 == 0xC0 {
                 Task { @MainActor in self?.selectProgram(Int(d1), sendMIDI: false) }
+            } else if status & 0xF0 == 0xB0 {
+                let channel = Int(status & 0x0F) + 1
+                Task { @MainActor in self?.handleController(channel: channel, cc: Int(d1), value: Int(d2)) }
             }
+        }
+        midi.onSysEx = { [weak self] data in
+            Task { @MainActor in self?.handleSysEx(data) }
         }
     }
 
@@ -351,6 +508,7 @@ public final class SynthEngine {
         guard patch[offset] != value else { return }
         patch[offset] = value
         core.setParam(offset, patch[offset])
+        sendEditToDX7(offset: offset, value: patch[offset])
         syncToHost()
     }
 
@@ -449,6 +607,14 @@ public final class SynthEngine {
         p.setOperatorBytes(op, bytes, envelopeOnly: envelopeOnly)
         load(patch: p)
         return true
+    }
+
+    /// Replaces one slot of the current bank with a voice (for example one dragged in from the bank browser). If the slot is
+    /// the one being played, the voice is loaded too.
+    public func replaceVoice(at slot: Int, with voice: Patch) {
+        guard (0..<Cartridge.voiceCount).contains(slot) else { return }
+        bank.setPatch(voice, at: slot)
+        if slot == programIndex { load(patch: voice) } else { syncToHost() }
     }
 
     /// Stores the edited voice into the current bank slot.

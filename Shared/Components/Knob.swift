@@ -1,4 +1,5 @@
 import SwiftUI
+import DexedKit
 
 /// Rotary control driven by a vertical drag (works with touch, trackpad and mouse).
 struct Knob: View {
@@ -8,16 +9,28 @@ struct Knob: View {
     var labels: [String]?
     var displayOffset = 0
     var accessibilityTitle: String?
+    /// When set, the knob can be assigned to a MIDI controller (see `MIDIMappableModifier`).
+    var control: MappableControl?
     var tint: Color = Theme.accent
     var size: CGFloat = 46
 
     @State private var dragStart: Int?
+    @State private var learnTapHandled = false
+    @Environment(SynthEngine.self) private var engine
 
     private var fraction: Double {
         Double(value - range.lowerBound) / Double(max(1, range.upperBound - range.lowerBound))
     }
 
     var body: some View {
+        if let control {
+            knob.midiMappable(control)
+        } else {
+            knob
+        }
+    }
+
+    private var knob: some View {
         VStack(spacing: 3) {
             ZStack {
                 Circle().trim(from: 0.125, to: 0.875)
@@ -36,13 +49,18 @@ struct Knob: View {
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
+                        // In MIDI Learn Mode a tap selects this knob for learning instead of changing its value.
+                        if engine.midiLearnMode, let control {
+                            if !learnTapHandled { learnTapHandled = true; engine.toggleLearning(control) }
+                            return
+                        }
                         if dragStart == nil { dragStart = value }
                         let span = Double(range.upperBound - range.lowerBound)
                         let pointsForFullRange = 180.0
                         let delta = Int((-g.translation.height / pointsForFullRange * span).rounded())
                         value = min(range.upperBound, max(range.lowerBound, (dragStart ?? value) + delta))
                     }
-                    .onEnded { _ in dragStart = nil }
+                    .onEnded { _ in dragStart = nil; learnTapHandled = false }
             )
             Text(display)
                 .font(.caption.monospacedDigit().weight(.medium))

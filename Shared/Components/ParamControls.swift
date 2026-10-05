@@ -26,7 +26,8 @@ struct ParamControl: View {
             .frame(minWidth: 70)
         } else {
             Knob(title: title ?? info.name, value: binding, range: 0...info.max, labels: info.labels,
-                 displayOffset: info.displayOffset, accessibilityTitle: info.name, tint: tint)
+                 displayOffset: info.displayOffset, accessibilityTitle: info.name,
+                 control: .voice(info.offset), tint: tint)
         }
     }
 }

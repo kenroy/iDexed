@@ -36,7 +36,7 @@ constexpr int kMinNoteBlocks = 15;
 
 enum EventType : uint8_t {
     EvNoteOn, EvNoteOff, EvPitchBend, EvCC, EvAftertouch, EvPatch, EvParam, EvPanic,
-    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity
+    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE
 };
 
 struct Event {
@@ -54,6 +54,7 @@ struct Voice {
     bool sustained = false;
     bool live = false;
     int keydown_seq = -1;
+    int mpePitchBend = 8192;     // per-note pitch bend (MPE member channels)
     int age = 0;                 // blocks rendered since keydown
     bool pendingKeyup = false;   // release requested before the minimum note length elapsed
     std::unique_ptr<Dx7Note> note;
@@ -196,10 +197,17 @@ struct DexedSynth {
     }
 
     void keydown(int channel, int pitch, int velo) {
-        if (velo == 0) { keyup(channel, pitch); return; }
+        if (velo == 0) { keyup(channel, pitch - transpose()); return; }
         if (normalizeVelocity) velo = (int)((float)velo * 0.7874015f);   // 100/127, as Dexed
         pitch += transpose();
         if (pitch < 0 || pitch > 127) return;
+
+        if (controllers.mpeEnabled) {
+            // Two notes down on one channel means this is not an MPE controller: fall back to normal pitch bend (as Dexed).
+            for (auto &other : voices) {
+                if (other.keydown && other.channel == channel) { controllers.mpeEnabled = false; break; }
+            }
+        }
 
         bool triggerLfo = true;
         for (auto &v : voices) if (v.keydown) { triggerLfo = false; break; }
@@ -217,7 +225,9 @@ struct DexedSynth {
         v.age = 0;
         v.pendingKeyup = false;
         bool voiceSteal = v.note->isPlaying();
+        v.mpePitchBend = 8192;
         v.note->init(data, pitch, velo, channel, &controllers);
+        v.note->mpePitchBend = 8192;
         if (data[136] && !voiceSteal) v.note->oscSync();
         if (voices[lastActiveVoice].midi_note != -1 && controllers.portamento_enable_cc &&
             controllers.portamento_cc > 0)
@@ -251,11 +261,13 @@ struct DexedSynth {
         lastActiveVoice = n;
     }
 
-    void keyup(int, int pitch) {
+    void keyup(int channel, int pitch) {
         pitch += transpose();
         int n;
         for (n = 0; n < kMaxVoices; ++n) {
-            if (voices[n].midi_note == pitch && voices[n].keydown) {
+            // MPE: each note has its own channel. Otherwise find the note by pitch.
+            const bool matches = controllers.mpeEnabled ? voices[n].channel == channel : voices[n].midi_note == pitch;
+            if (matches && voices[n].keydown) {
                 voices[n].keydown = false;
                 break;
             }
@@ -310,6 +322,16 @@ struct DexedSynth {
             case EvNoteOn: keydown(e.a, e.b, e.c); break;
             case EvNoteOff: keyup(e.a, e.b); break;
             case EvPitchBend: controllers.values_[kControllerPitch] = e.a; break;
+            case EvChannelPitchBend:
+                if (controllers.mpeEnabled && e.a != 1) {
+                    for (auto &v : voices) {
+                        if (v.keydown && v.channel == e.a) { v.mpePitchBend = e.b; v.note->mpePitchBend = e.b; break; }
+                    }
+                } else {
+                    controllers.values_[kControllerPitch] = e.b;
+                }
+                break;
+            case EvMPE: controllers.mpeEnabled = e.a != 0; controllers.mpePitchBendRange = e.b; break;
             case EvCC:
                 switch (e.a) {
                     case 1: controllers.modwheel_cc = e.b; controllers.refresh(); break;
@@ -500,6 +522,8 @@ void dexed_set_param(DexedSynth *s, int offset, int value) { post(s, EvParam, of
 void dexed_note_on(DexedSynth *s, int ch, int note, int vel) { post(s, EvNoteOn, ch, note, vel); }
 void dexed_note_off(DexedSynth *s, int ch, int note) { post(s, EvNoteOff, ch, note); }
 void dexed_pitch_bend(DexedSynth *s, int v) { post(s, EvPitchBend, v); }
+void dexed_pitch_bend_channel(DexedSynth *s, int channel, int v) { post(s, EvChannelPitchBend, channel, v); }
+void dexed_set_mpe(DexedSynth *s, bool on, int range) { post(s, EvMPE, on, range); }
 void dexed_control_change(DexedSynth *s, int cc, int v) { post(s, EvCC, cc, v); }
 void dexed_aftertouch(DexedSynth *s, int v) { post(s, EvAftertouch, v); }
 void dexed_panic(DexedSynth *s) { post(s, EvPanic); }

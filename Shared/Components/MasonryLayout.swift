@@ -31,7 +31,15 @@ struct MasonryLayout: Layout {
             frames.append(CGRect(x: CGFloat(column) * (columnWidth + spacing), y: heights[column], width: columnWidth, height: h))
             heights[column] += h + spacing
         }
-        return (frames, max(0, (heights.max() ?? 0) - spacing))
+        // Stretch the last card of each shorter column so every column ends at the same height.
+        let tallest = (heights.max() ?? 0) - spacing
+        for column in heights.indices where heights[column] > 0 {
+            let shortfall = tallest - (heights[column] - spacing)
+            if shortfall > 0.5, let last = frames.lastIndex(where: { abs($0.minX - CGFloat(column) * (columnWidth + spacing)) < 0.5 }) {
+                frames[last].size.height += shortfall
+            }
+        }
+        return (frames, max(0, tallest))
     }
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
