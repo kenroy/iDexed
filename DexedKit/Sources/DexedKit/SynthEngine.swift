@@ -19,8 +19,8 @@ public final class SynthEngine {
     private var isRecovering = false
 
     public var engineType: EngineType = .markI { didSet { core.setEngine(engineType); syncToHost() } }
-    public var monoMode = false { didSet { core.setMono(monoMode) } }
-    public var operatorEnabled = [Bool](repeating: true, count: 6) { didSet { core.setOperatorMask(opMask); sendEditToDX7(offset: 155, value: opMask) } }
+    public var monoMode = false { didSet { core.setMono(monoMode); syncToHost() } }
+    public var operatorEnabled = [Bool](repeating: true, count: 6) { didSet { core.setOperatorMask(opMask); sendEditToDX7(offset: 155, value: opMask); syncToHost() } }
     public var masterVolume: Float = 1.0 { didSet { audio?.mainMixerNode.outputVolume = masterVolume; syncToHost() } }
     /// Publish played notes as a virtual MIDI source ("iDexed") for other devices/apps.
     public var sendsMIDI: Bool = UserDefaults.standard.object(forKey: "sendsMIDI") as? Bool ?? true {
@@ -44,26 +44,26 @@ public final class SynthEngine {
     /// How each MIDI controller drives the sound (like Dexed's controller settings). Vibrato/tremolo depth is still limited
     /// by the voice's own Pitch Mod Sens / Amp Mod Sens.
     public var controllerRouting: [ModSource: ControllerRouting] = SynthEngine.loadRouting() {
-        didSet { SynthEngine.saveRouting(controllerRouting); applyControllerSettings() }
+        didSet { if hosted == nil { SynthEngine.saveRouting(controllerRouting) }; applyControllerSettings() }
     }
 
     /// Pitch-bend range in semitones (up and down), or a fixed step size when `pitchBendStep` is not 0.
     public var pitchBendUp: Int = UserDefaults.standard.object(forKey: "pitchBendUp") as? Int ?? 3 {
-        didSet { UserDefaults.standard.set(pitchBendUp, forKey: "pitchBendUp"); applyControllerSettings() }
+        didSet { remember(pitchBendUp, "pitchBendUp"); applyControllerSettings() }
     }
     public var pitchBendDown: Int = UserDefaults.standard.object(forKey: "pitchBendDown") as? Int ?? 3 {
-        didSet { UserDefaults.standard.set(pitchBendDown, forKey: "pitchBendDown"); applyControllerSettings() }
+        didSet { remember(pitchBendDown, "pitchBendDown"); applyControllerSettings() }
     }
     public var pitchBendStep: Int = UserDefaults.standard.object(forKey: "pitchBendStep") as? Int ?? 0 {
-        didSet { UserDefaults.standard.set(pitchBendStep, forKey: "pitchBendStep"); applyControllerSettings() }
+        didSet { remember(pitchBendStep, "pitchBendStep"); applyControllerSettings() }
     }
 
     /// Portamento time 0…99 (0 = off) and glissando (glide in semitone steps).
     public var portamentoTime: Int = UserDefaults.standard.object(forKey: "portamentoTime") as? Int ?? 0 {
-        didSet { UserDefaults.standard.set(portamentoTime, forKey: "portamentoTime"); applyControllerSettings() }
+        didSet { remember(portamentoTime, "portamentoTime"); applyControllerSettings() }
     }
     public var glissando: Bool = UserDefaults.standard.object(forKey: "glissando") as? Bool ?? false {
-        didSet { UserDefaults.standard.set(glissando, forKey: "glissando"); applyControllerSettings() }
+        didSet { remember(glissando, "glissando"); applyControllerSettings() }
     }
 
     /// Scale incoming velocities by 100/127, like a DX7 keyboard that tops out at 100.
@@ -87,7 +87,7 @@ public final class SynthEngine {
     }
     /// On a custom tuning, make transposes of a whole octave move by whole scale periods (Dexed's default).
     public var transposeAsScale: Bool = UserDefaults.standard.object(forKey: "transposeAsScale") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(transposeAsScale, forKey: "transposeAsScale"); applyControllerSettings() }
+        didSet { remember(transposeAsScale, "transposeAsScale"); applyControllerSettings() }
     }
 
     /// Follow an MTS-ESP master's tuning when one is running (macOS only; Dexed has this on by default).
@@ -116,6 +116,12 @@ public final class SynthEngine {
         core.setMIDIChannel(midiChannel)
         core.setMTS(mtsEnabled)
         core.setTransposeAsScale(transposeAsScale)
+        syncToHost()
+    }
+
+    /// Settings are remembered between launches, except in a plug-in, where the host's project owns them.
+    private func remember(_ value: Any, _ key: String) {
+        if hosted == nil { UserDefaults.standard.set(value, forKey: key) }
     }
 
     private static func loadRouting() -> [ModSource: ControllerRouting] {
@@ -377,6 +383,39 @@ public final class SynthEngine {
         tuningName = s.tuningName
         currentSCL = s.scl
         currentKBM = s.kbm
+        // The controller and mode settings the host can automate.
+        func v(_ address: Int) -> Int { s.extra[address] ?? HostParameters.defaultExtras[address] ?? 0 }
+        monoMode = v(HostParameter.mono) != 0
+        glissando = v(HostParameter.glissando) != 0
+        portamentoTime = v(HostParameter.portamentoTime)
+        transposeAsScale = v(HostParameter.transposeAsScale) != 0
+        pitchBendUp = v(HostParameter.bendUp); pitchBendDown = v(HostParameter.bendDown); pitchBendStep = v(HostParameter.bendStep)
+        operatorEnabled = (0..<6).map { v(HostParameter.operatorSwitch($0)) != 0 }
+        var routing = controllerRouting
+        for source in ModSource.allCases {
+            let k = source.rawValue
+            routing[source] = ControllerRouting(range: v(HostParameter.controller(k, 0)), pitch: v(HostParameter.controller(k, 1)) != 0,
+                                                amp: v(HostParameter.controller(k, 2)) != 0, eg: v(HostParameter.controller(k, 3)) != 0)
+        }
+        controllerRouting = routing
+    }
+
+    /// The editor's side of those settings, as the session stores them.
+    private func hostExtras() -> [Int: Int] {
+        var e: [Int: Int] = [
+            HostParameter.mono: monoMode ? 1 : 0, HostParameter.glissando: glissando ? 1 : 0,
+            HostParameter.portamentoTime: portamentoTime, HostParameter.transposeAsScale: transposeAsScale ? 1 : 0,
+            HostParameter.bendUp: pitchBendUp, HostParameter.bendDown: pitchBendDown, HostParameter.bendStep: pitchBendStep,
+        ]
+        for op in 0..<6 { e[HostParameter.operatorSwitch(op)] = operatorEnabled[op] ? 1 : 0 }
+        for source in ModSource.allCases {
+            let k = source.rawValue, r = routing(source)
+            e[HostParameter.controller(k, 0)] = r.range
+            e[HostParameter.controller(k, 1)] = r.pitch ? 1 : 0
+            e[HostParameter.controller(k, 2)] = r.amp ? 1 : 0
+            e[HostParameter.controller(k, 3)] = r.eg ? 1 : 0
+        }
+        return e
     }
 
            private func syncToHost() {
@@ -387,6 +426,7 @@ public final class SynthEngine {
             s.volume = masterVolume; s.tune = masterTune; s.cutoff = filterCutoff; s.resonance = filterResonance
             s.engine = engineType
             s.scl = currentSCL; s.kbm = currentKBM; s.tuningName = tuningName
+            s.extra = hostExtras()
         }
     }
 

@@ -14,6 +14,8 @@ public struct HostedSettings: Sendable, Equatable {
     public var scl: String?
     public var kbm: String?
     public var tuningName: String?
+    /// Values of the parameters the editor owns (mono, operator switches, portamento, bend, controllers), by host address.
+    public var extra = HostParameters.defaultExtras
     public init() {}
 }
 
@@ -56,6 +58,7 @@ public final class HostedSession: @unchecked Sendable {
         core.setMasterTune(new.tune)
         core.setFilter(cutoff: new.cutoff, resonance: new.resonance)
         core.setTuning(scl: new.scl, kbm: new.kbm)
+        HostParameters.applyExtras(new.extra, to: core)
         notifyEditor()
     }
 
@@ -76,7 +79,24 @@ public final class HostedSession: @unchecked Sendable {
         case HostParameter.cutoff: s.cutoff = value; core.setFilter(cutoff: value, resonance: s.resonance)
         case HostParameter.resonance: s.resonance = value; core.setFilter(cutoff: s.cutoff, resonance: value)
         case HostParameter.tune: s.tune = (value + 100) / 200; core.setMasterTune(s.tune)
-        default: return
+        default:
+            guard let spec = HostParameters.spec(for: address) else { return }
+            let v = max(spec.min, min(spec.max, Int(value.rounded())))
+            switch spec.target {
+            case .voice(let offset):
+                let stored = v - spec.min
+                guard s.patch[offset] != stored else { return }
+                s.patch[offset] = stored
+                core.setParam(offset, stored)
+            case .engine:
+                guard let engine = EngineType(rawValue: v), engine != s.engine else { return }
+                s.engine = engine
+                core.setEngine(engine)
+            case .extra:
+                guard s.extra[address] != v else { return }
+                s.extra[address] = v
+                HostParameters.applyExtras(s.extra, to: core)
+            }
         }
         lock.lock(); _settings = s; lock.unlock()
         notifyEditor()
@@ -89,7 +109,13 @@ public final class HostedSession: @unchecked Sendable {
         case HostParameter.cutoff: return s.cutoff
         case HostParameter.resonance: return s.resonance
         case HostParameter.tune: return s.tune * 200 - 100
-        default: return 0
+        default:
+            guard let spec = HostParameters.spec(for: address) else { return 0 }
+            switch spec.target {
+            case .voice(let offset): return Double(s.patch[offset] + spec.min)
+            case .engine: return Double(s.engine.rawValue)
+            case .extra: return Double(s.extra[address] ?? spec.defaultValue)
+            }
         }
     }
 
@@ -111,6 +137,7 @@ public final class HostedSession: @unchecked Sendable {
             "volume": Double(s.volume),
             "tune": s.tune, "cutoff": s.cutoff, "resonance": s.resonance,
             "engine": s.engine.rawValue,
+            "extra": Dictionary(uniqueKeysWithValues: s.extra.map { (String($0.key), $0.value) }),
         ]
         if let scl = s.scl { d["scl"] = scl }
         if let kbm = s.kbm { d["kbm"] = kbm }
@@ -132,6 +159,9 @@ public final class HostedSession: @unchecked Sendable {
         s.scl = d["scl"] as? String
         s.kbm = d["kbm"] as? String
         s.tuningName = d["tuningName"] as? String
+        if let saved = d["extra"] as? [String: Int] {
+            for (key, value) in saved { if let address = Int(key) { s.extra[address] = value } }
+        }
         apply(s)
     }
 }

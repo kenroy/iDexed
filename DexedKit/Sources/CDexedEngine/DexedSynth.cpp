@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <mutex>
 
 #include "msfa/synth.h"
 #include "msfa/aligned_buf.h"
@@ -150,9 +151,10 @@ struct DexedSynth {
 #if TARGET_OS_OSX
         mts = MTS_RegisterClient();       // MTS-ESP masters only exist on desktop; iOS and iPadOS run without one
 #endif
-        Exp2::init();
-        Tanh::init();
-        Sin::init();
+        // The lookup tables are the same for every instance, so build them once. Rebuilding them while another instance
+        // (another plug-in in the same host) is rendering would be a data race on shared tables.
+        static std::once_flag tablesOnce;
+        std::call_once(tablesOnce, [] { Exp2::init(); Tanh::init(); Sin::init(); });
         initRateDependentTables(sr);
 
         tuning = createStandardTuning();

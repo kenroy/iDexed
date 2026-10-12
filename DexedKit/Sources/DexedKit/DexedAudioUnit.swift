@@ -9,6 +9,9 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
     private var outputBusArray: AUAudioUnitBusArray!
     private var _parameterTree: AUParameterTree!
     private let scratch = RenderScratch(capacity: 16384)
+    /// Parameter changes the host scheduled into the render stream, handed to the main thread.
+    private let scheduledChanges = ScheduledParameterQueue()
+    private var drainTimer: DispatchSourceTimer?
 
     public override init(componentDescription: AudioComponentDescription, options: AudioComponentInstantiationOptions = []) throws {
         let format = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
@@ -39,7 +42,23 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
             make("tune", "Tune", HostParameter.tune, -100, 100, .cents),
         ]
         params[0].value = 1; params[1].value = 1; params[2].value = 0; params[3].value = 0
-        _parameterTree = AUParameterTree.createTree(withChildren: params)
+
+        // Every voice, engine and controller parameter, grouped like Dexed's: Voice, Op1…Op6, Controllers.
+        var groups: [String: [AUParameter]] = [:]
+        for spec in HostParameters.all {
+            let flags: AudioUnitParameterOptions = [.flag_IsReadable, .flag_IsWritable]
+            let unit: AudioUnitParameterUnit = spec.isBoolean ? .boolean : (spec.labels != nil ? .indexed : .generic)
+            let p = AUParameterTree.createParameter(withIdentifier: spec.identifier, name: spec.name, address: AUParameterAddress(spec.address),
+                                                    min: AUValue(spec.min), max: AUValue(spec.max), unit: unit, unitName: nil, flags: flags,
+                                                    valueStrings: spec.labels, dependentParameters: nil)
+            p.value = AUValue(spec.defaultValue)
+            groups[spec.group, default: []].append(p)
+        }
+        let groupNames = ["Voice"] + (1...6).map { "Op\($0)" } + ["Controllers"]
+        let children: [AUParameterNode] = params + groupNames.compactMap { name in
+            groups[name].map { AUParameterTree.createGroup(withIdentifier: name.lowercased(), name: name, children: $0) }
+        }
+        _parameterTree = AUParameterTree.createTree(withChildren: children)
         let session = self.session
         _parameterTree.implementorValueObserver = { param, value in
             session.setHostParameter(Int(param.address), Double(value))
@@ -93,17 +112,33 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
     public override func allocateRenderResources() throws {
         try super.allocateRenderResources()
         session.core.resetSampleRate(outputBusArray[0].format.sampleRate)
+        startDrainingScheduledChanges()
     }
 
     public override func deallocateRenderResources() {
+        drainTimer?.cancel()
+        drainTimer = nil
         session.core.panic()
         super.deallocateRenderResources()
+    }
+
+    /// Automation the host schedules arrives inside the render call, where we can't take locks or allocate. It is queued
+    /// there and applied a few milliseconds later from the main queue.
+    private func startDrainingScheduledChanges() {
+        drainTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: .milliseconds(15))
+        let queue = scheduledChanges, session = self.session
+        timer.setEventHandler { queue.drain { address, value in session.setHostParameter(address, Double(value)) } }
+        timer.resume()
+        drainTimer = timer
     }
 
     public override var internalRenderBlock: AUInternalRenderBlock {
         let core = session.core
         let scratch = self.scratch
         let session = self.session
+        let scheduled = scheduledChanges
 
         return { actionFlags, timestamp, frameCount, _, outputData, realtimeEvents, _ in
             let frames = min(Int(frameCount), scratch.capacity)
@@ -155,6 +190,10 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
                             }
                         }
                     }
+                case .parameter, .parameterRamp:
+                    // A ramp is applied as a jump to its target value; both are queued, not applied here.
+                    let p = e.pointee.parameter
+                    scheduled.push(address: Int(p.parameterAddress), value: p.value)
                 default: break
                 }
                 event = UnsafePointer(e.pointee.head.next)
@@ -192,5 +231,49 @@ final class RenderScratch: @unchecked Sendable {
     deinit {
         mono.deallocate()
         channel.forEach { $0.deallocate() }
+    }
+}
+
+/// A small fixed-size queue from the render thread to the main thread. The render thread only ever tries the lock (it
+/// never waits) and drops a change if the main thread happens to hold it, so it can't be held up.
+final class ScheduledParameterQueue: @unchecked Sendable {
+    private let capacity = 2048
+    private let addresses: UnsafeMutablePointer<Int>
+    private let values: UnsafeMutablePointer<Float>
+    private var count = 0
+    private let lock: UnsafeMutablePointer<os_unfair_lock>
+
+    init() {
+        addresses = .allocate(capacity: capacity)
+        values = .allocate(capacity: capacity)
+        lock = .allocate(capacity: 1)
+        lock.initialize(to: os_unfair_lock())
+    }
+
+    deinit {
+        addresses.deallocate(); values.deallocate()
+        lock.deinitialize(count: 1); lock.deallocate()
+    }
+
+    /// Render thread.
+    func push(address: Int, value: Float) {
+        guard os_unfair_lock_trylock(lock) else { return }
+        if count < capacity {
+            addresses[count] = address
+            values[count] = value
+            count += 1
+        }
+        os_unfair_lock_unlock(lock)
+    }
+
+    /// Main thread: hands every queued change, oldest first, to `apply`.
+    func drain(_ apply: (Int, Float) -> Void) {
+        os_unfair_lock_lock(lock)
+        let n = count
+        let a = Array(UnsafeBufferPointer(start: addresses, count: n))
+        let v = Array(UnsafeBufferPointer(start: values, count: n))
+        count = 0
+        os_unfair_lock_unlock(lock)
+        for i in 0..<n { apply(a[i], v[i]) }
     }
 }

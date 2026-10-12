@@ -241,6 +241,127 @@ import AudioToolbox
     }
 
 
+    @Suite(.serialized) struct HostAutomationTests {
+        func makeUnit() throws -> DexedAudioUnit {
+            func fourCC(_ s: String) -> FourCharCode { s.utf8.reduce(0) { ($0 << 8) | FourCharCode($1) } }
+            let desc = AudioComponentDescription(componentType: kAudioUnitType_MusicDevice, componentSubType: fourCC("iDxd"),
+                                                 componentManufacturer: fourCC("Kenr"), componentFlags: 0, componentFlagsMask: 0)
+            return try DexedAudioUnit(componentDescription: desc)
+        }
+        func address(_ identifier: String) -> Int { HostParameters.all.first { $0.identifier == identifier }!.address }
+
+        @Test func theTableIsConsistent() {
+            let all = HostParameters.all
+            #expect(Set(all.map(\.address)).count == all.count, "addresses must be unique")
+            #expect(Set(all.map(\.identifier)).count == all.count, "identifiers must be unique")
+            #expect(all.allSatisfy { !$0.identifier.contains(".") }, "AU identifiers can't contain a dot")
+            #expect(all.allSatisfy { $0.min <= $0.defaultValue && $0.defaultValue <= $0.max })
+            #expect(all.allSatisfy { $0.labels == nil || $0.labels!.count == $0.max - $0.min + 1 })
+            for op in 1...6 { #expect(all.filter { $0.group == "Op\(op)" }.count == 22) }
+            #expect(all.filter { $0.group == "Voice" }.count == 19)
+            #expect(all.filter { $0.group == "Controllers" }.count == 24)
+            #expect(all.count == 175)
+        }
+
+        @Test func theUnitExposesEveryParameterInGroups() throws {
+            let au = try makeUnit()
+            let tree = try #require(au.parameterTree)
+            #expect(tree.allParameters.count == 4 + HostParameters.all.count)
+            let groups = tree.children.compactMap { $0 as? AUParameterGroup }.map(\.displayName)
+            #expect(groups == ["Voice", "Op1", "Op2", "Op3", "Op4", "Op5", "Op6", "Controllers"])
+            let algorithm = try #require(tree.parameter(withAddress: AUParameterAddress(address("algorithm"))))
+            #expect(algorithm.minValue == 1 && algorithm.maxValue == 32)
+            let lfoWave = try #require(tree.parameter(withAddress: AUParameterAddress(address("lfoWaveform"))))
+            #expect(lfoWave.valueStrings?.first == "Triangle")
+        }
+
+        @Test func everyParameterRoundTripsThroughTheSession() {
+            let session = HostedSession()
+            for spec in HostParameters.all {
+                let target = spec.max
+                session.setHostParameter(spec.address, Double(target))
+                #expect(session.hostParameter(spec.address) == Double(target), "\(spec.name)")
+                session.setHostParameter(spec.address, Double(spec.min))
+                #expect(session.hostParameter(spec.address) == Double(spec.min), "\(spec.name) at its minimum")
+            }
+        }
+
+        @Test func hostWritesChangeTheStoredVoice() throws {
+            let au = try makeUnit()
+            let tree = try #require(au.parameterTree)
+            func set(_ id: String, _ v: Float) { tree.parameter(withAddress: AUParameterAddress(address(id)))!.value = v }
+            set("algorithm", 17); set("transpose", -12); set("op3_outputLevel", 42); set("op2_detune", -3); set("lfoWaveform", 4)
+            let patch = au.session.settings.patch
+            #expect(patch.algorithm == 16)                       // stored 0-based
+            #expect(patch[144] == 12)                            // transpose −12 is stored as 12
+            #expect(patch[Patch.offset(op: 2, .outputLevel)] == 42)
+            #expect(patch[Patch.offset(op: 1, .detune)] == 4)    // −3 is stored as 4
+            #expect(patch[142] == 4)
+            // and the host reads the same numbers back
+            #expect(tree.parameter(withAddress: AUParameterAddress(address("algorithm")))!.value == 17)
+            #expect(tree.parameter(withAddress: AUParameterAddress(address("transpose")))!.value == -12)
+        }
+
+        @Test func anOperatorSwitchMutesItsOperator() {
+            let session = HostedSession()
+            func peak() -> Float {
+                session.core.noteOn(60, velocity: 100)
+                _ = session.core.render(frames: 2400)
+                let p = session.core.render(frames: 4800).map { abs($0) }.max() ?? 0
+                session.core.panic()
+                return p
+            }
+            #expect(peak() > 0.05)
+            session.setHostParameter(address("op1_switch"), 0)       // INIT VOICE only sounds OP1
+            #expect(peak() < 0.001)
+            session.setHostParameter(address("op1_switch"), 1)
+            #expect(peak() > 0.05)
+        }
+
+        @Test func controllerSettingsAreSavedWithTheProject() {
+            let first = HostedSession()
+            first.setHostParameter(address("mono"), 1)
+            first.setHostParameter(address("pitchBendUp"), 7)
+            first.setHostParameter(address("modwheel_range"), 33)
+            first.setHostParameter(address("engine"), 2)
+            let saved = first.serialize()
+            let second = HostedSession()
+            second.restore(saved)
+            #expect(second.hostParameter(address("mono")) == 1)
+            #expect(second.hostParameter(address("pitchBendUp")) == 7)
+            #expect(second.hostParameter(address("modwheel_range")) == 33)
+            #expect(second.settings.engine == .opl)
+        }
+
+        @Test func scheduledChangesAreHandedOverInOrder() {
+            let q = ScheduledParameterQueue()
+            q.push(address: 1000, value: 1); q.push(address: 1001, value: 2); q.push(address: 1000, value: 3)
+            var got: [(Int, Float)] = []
+            q.drain { got.append(($0, $1)) }
+            #expect(got.map(\.0) == [1000, 1001, 1000] && got.map(\.1) == [1, 2, 3])
+            var again = 0
+            q.drain { _, _ in again += 1 }
+            #expect(again == 0)
+        }
+
+        @Test @MainActor func theEditorFollowsTheHostAndTheHostFollowsTheEditor() async throws {
+            let session = HostedSession()
+            let engine = SynthEngine(hosted: session)
+            session.setHostParameter(address("mono"), 1)
+            session.setHostParameter(address("op4_switch"), 0)
+            try await Task.sleep(for: .milliseconds(200))        // the editor is told on the main queue
+            #expect(engine.monoMode)
+            #expect(engine.operatorEnabled[3] == false)
+
+            engine.pitchBendUp = 9
+            engine.portamentoTime = 40
+            #expect(session.hostParameter(address("pitchBendUp")) == 9)
+            #expect(session.hostParameter(address("portamentoTime")) == 40)
+            engine.operatorEnabled[0] = false
+            #expect(session.hostParameter(address("op1_switch")) == 0)
+        }
+    }
+
     @Suite struct AudioUnitTests {
         static func fourCC(_ s: String) -> FourCharCode { s.utf8.reduce(0) { ($0 << 8) | FourCharCode($1) } }
 

@@ -21,6 +21,7 @@
  *
  */
 
+#include <mutex>
 #include "EngineMkI.h"
 #define _USE_MATH_DEFINES
 #include <cmath>
@@ -78,18 +79,22 @@ static inline uint16_t sinLog(uint16_t phi) {
 }
 
 EngineMkI::EngineMkI() {
-    float bitReso = SINLOG_TABLESIZE;
-    
-    for(int i=0;i<SINLOG_TABLESIZE;i++) {
-        float x1 = sin(((0.5+i)/bitReso) * M_PI/2.0);
-        sinLogTable[i] = round(-1024 * log2(x1));
-    }
-    
-    bitReso = SINEXP_TABLESIZE;
-    for(int i=0;i<SINEXP_TABLESIZE;i++) {
-        float x1 = (pow(2, float(i)/bitReso)-1) * 4096;
-        sinExpTable[i] = round(x1);
-    }
+    // The tables are identical for every instance: fill them once, not on each construction, so a new instance can't
+    // write them while another one is rendering.
+    static std::once_flag tablesOnce;
+    std::call_once(tablesOnce, [] {
+        float bitReso = SINLOG_TABLESIZE;
+        for(int i=0;i<SINLOG_TABLESIZE;i++) {
+            float x1 = sin(((0.5+i)/bitReso) * M_PI/2.0);
+            sinLogTable[i] = round(-1024 * log2(x1));
+        }
+
+        bitReso = SINEXP_TABLESIZE;
+        for(int i=0;i<SINEXP_TABLESIZE;i++) {
+            float x1 = (pow(2, float(i)/bitReso)-1) * 4096;
+            sinExpTable[i] = round(x1);
+        }
+    });
     
 #ifdef MKIDEBUG
     char buffer[4096];
