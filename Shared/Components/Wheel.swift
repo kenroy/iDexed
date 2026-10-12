@@ -43,9 +43,9 @@ struct Wheel: View {
             ZStack(alignment: .top) {
                 // The plate the groove is cut into.
                 RoundedRectangle(cornerRadius: 9, style: .continuous)
-                    .fill(Color(white: 0.095))
+                    .fill(LinearGradient(colors: [Color(white: 0.20), Color(white: 0.15)], startPoint: .top, endPoint: .bottom))
                     .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
-                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.10), .white.opacity(0.03)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.30), .white.opacity(0.12)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
 
                 // Centre notch on either side of the groove (pitch only), so the rest position is easy to find.
                 if springsToCenter {
@@ -101,5 +101,103 @@ struct Wheel: View {
                     }
             )
         }
+    }
+}
+
+/// The same performance slider laid on its side, for the strip above the keyboard. The caption sits above the slot.
+/// Left is 0 (pitch down); a pitch slider springs back to the middle when released.
+struct HorizontalWheel: View {
+    var title: String
+    var caption: String
+    var value: Double              // 0…1
+    var springsToCenter: Bool
+    var onChange: (Double) -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(caption)
+                .font(.system(size: 8, weight: .bold))
+                .tracking(0.4)
+                .foregroundStyle(.white.opacity(0.55))
+                .lineLimit(1)
+                .frame(height: 10)
+            track
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue("\(Int(value * 100)) percent")
+        .accessibilityAdjustableAction { dir in
+            let step = 0.05
+            switch dir {
+            case .increment: onChange(min(1, value + step))
+            case .decrement: onChange(max(0, value - step))
+            @unknown default: break
+            }
+        }
+    }
+
+    private var track: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let capW: CGFloat = 34
+            let grooveH: CGFloat = 12
+            let travel = max(1, w - capW)
+            ZStack(alignment: .leading) {
+                // The plate the groove is cut into.
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: 0.20), Color(white: 0.15)], startPoint: .top, endPoint: .bottom))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(LinearGradient(colors: [.white.opacity(0.30), .white.opacity(0.12)], startPoint: .top, endPoint: .bottom), lineWidth: 1))
+
+                // Centre notch above and below the groove (pitch only), so the rest position is easy to find.
+                if springsToCenter {
+                    VStack(spacing: grooveH + 8) {
+                        Rectangle().fill(.white.opacity(0.30)).frame(width: 1.5, height: 4)
+                        Rectangle().fill(.white.opacity(0.30)).frame(width: 1.5, height: 4)
+                    }
+                    .offset(x: capW / 2 + travel / 2 - 0.75)
+                }
+
+                // The groove: a recessed slot.
+                RoundedRectangle(cornerRadius: grooveH / 2, style: .continuous)
+                    .fill(LinearGradient(colors: [Color.black, Color(white: 0.02)], startPoint: .top, endPoint: .bottom))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: grooveH / 2, style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [.black.opacity(0.95), .white.opacity(0.20)],
+                                                         startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1.5)
+                    )
+                    .frame(height: grooveH)
+                    .padding(.horizontal, capW / 2 - 4)
+
+                // The raised slider cap, with just the teal indicator line.
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: 0.68), Color(white: 0.36)], startPoint: .top, endPoint: .bottom))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(LinearGradient(colors: [.white.opacity(0.55), .black.opacity(0.45)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+                    )
+                    .overlay {
+                        Capsule().fill(Theme.accent).frame(width: 3, height: h - 14)
+                            .shadow(color: Theme.accent.opacity(0.8), radius: 3)
+                    }
+                    .frame(width: capW, height: h - 4)
+                    .shadow(color: .black.opacity(0.65), radius: 3, y: 2)
+                    .offset(x: CGFloat(value) * travel)
+            }
+            .frame(width: w, height: h)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        let v = Double((g.location.x - capW / 2) / travel)
+                        onChange(min(1, max(0, v)))
+                    }
+                    .onEnded { _ in
+                        if springsToCenter { withAnimation(.snappy(duration: 0.12)) { onChange(0.5) } }
+                    }
+            )
+        }
+        .frame(height: 34)
     }
 }

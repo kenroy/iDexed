@@ -832,6 +832,45 @@ import AudioToolbox
         }
     }
 
+    @Suite struct ProgramChangeGhostTests {
+        /// Peak level in the second after a program change, with no key held, when the old note had just been released.
+        func peakAfterSwitch(_ cart: Cartridge, from a: Int, to b: Int?) -> Float {
+            let core = SynthCore(sampleRate: 48000)
+            core.setPatch(cart.patch(at: a))
+            _ = core.render(frames: 256)
+            core.noteOn(60, velocity: 100)
+            _ = core.render(frames: 4800)
+            core.noteOff(60)
+            if let b { core.setPatch(cart.patch(at: b)) }
+            _ = core.render(frames: 4800)
+            return core.render(frames: 48000).map { abs($0) }.max() ?? 0
+        }
+
+        @Test func switchingVoiceDoesNotRevoiceANoteThatWasAlreadyReleased() throws {
+            // The bank sits in the app's resources, three levels above the package tests.
+            let url = URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Shared/Resources/FactoryBanks/Dexed_01.syx")
+            guard let data = try? Data(contentsOf: url) else { return }
+            let cart = try Cartridge(sysex: data)
+            for (a, b) in [(9, 0), (6, 3), (3, 29), (9, 10)] {
+                let natural = peakAfterSwitch(cart, from: a, to: nil)
+                let switched = peakAfterSwitch(cart, from: a, to: b)
+                #expect(switched <= natural * 1.5 + 0.002, "voice \(a) → \(b): \(switched) after the switch, \(natural) if left alone")
+            }
+        }
+
+        @Test func aHeldKeyStillFollowsTheNewVoice() {
+            let core = SynthCore(sampleRate: 48000)
+            core.noteOn(60, velocity: 100)
+            _ = core.render(frames: 4800)
+            var p = Patch.initVoice; p.algorithm = 4
+            core.setPatch(p)
+            let peak = core.render(frames: 9600).map { abs($0) }.max() ?? 0
+            #expect(peak > 0.01, "a note that is still held must keep sounding")
+        }
+    }
+
     @Suite struct MTSESPTests {
         @Test func clientIsPresentOnMacAndNotConnectedWithoutAMaster() {
             let core = SynthCore(sampleRate: 48000)

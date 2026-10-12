@@ -154,6 +154,7 @@ private struct HeaderView: View {
     var exportBank: () -> Void
     var exportVoice: () -> Void
     @State private var nameDraft = ""
+    @AppStorage("wheelsPosition") private var wheelsPosition = 0
 
     private var compact: Bool { sizeClass == .compact }
 
@@ -277,6 +278,11 @@ private struct HeaderView: View {
                 }
                 #endif
             }
+            Picker("Pitch & Mod Sliders", systemImage: "slider.horizontal.below.rectangle", selection: $wheelsPosition) {
+                Text("On the Left").tag(0)
+                Text("In the Centre").tag(1)
+                Text("On the Right").tag(2)
+            }
             Picker("MIDI Channel", systemImage: "pianokeys", selection: Binding(get: { engine.midiChannel }, set: { engine.midiChannel = $0 })) {
                 Text("Omni (all channels)").tag(0)
                 ForEach(1...16, id: \.self) { Text("Channel \($0)").tag($0) }
@@ -378,6 +384,28 @@ private struct HeaderView: View {
 
 // MARK: - Keyboard
 
+/// The octave arrows and the hide button: a clearly lighter plate with an outline and a teal symbol, so they stand out from the
+/// dark bar behind them. The padding matches what a bordered button adds, so the keyboard layout is unchanged.
+private struct KeyboardButtonStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Theme.accent)
+            .padding(.horizontal, 12).padding(.vertical, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(LinearGradient(colors: [Color(white: configuration.isPressed ? 0.30 : 0.23),
+                                                  Color(white: configuration.isPressed ? 0.22 : 0.16)], startPoint: .top, endPoint: .bottom))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(0.35), .white.opacity(0.12)], startPoint: .top, endPoint: .bottom), lineWidth: 1)
+            )
+            .opacity(isEnabled ? 1 : 0.35)
+    }
+}
+
 private struct KeyboardBar: View {
     @Environment(SynthEngine.self) private var engine
     @Binding var octave: Int
@@ -385,48 +413,136 @@ private struct KeyboardBar: View {
     var landscapePhone = false
     var collapse: () -> Void = {}
     @Environment(\.horizontalSizeClass) private var sizeClass
+    /// Where the Pitch and Mod sliders sit above the keys: 0 left, 1 centre, 2 right. Drag the grip to move them.
+    @AppStorage("wheelsPosition") private var wheelsPosition = 0
+    @State private var dragOffset: CGFloat = 0
 
     var body: some View {
         let compact = sizeClass == .compact
         let arrowWidth: CGFloat = compact ? 30 : 36
         let keyWidth: CGFloat = compact ? 36 : 46
         GeometryReader { geo in
-            // Fixed comfortable key width; the window decides how many keys fit.
-            let keyboardWidth = geo.size.width - 24 - 16 - 2 * arrowWidth - 2 * 32 - 8
+            // Fixed comfortable key width; the window decides how many keys fit. Landscape phones keep the sliders beside
+            // the keys, since there is no height to spare for a strip above them.
+            let sideWheels: CGFloat = landscapePhone ? 64 + 8 : 0
+            let keyboardWidth = geo.size.width - 24 - 16 - 2 * arrowWidth - sideWheels
             let whiteKeys = max(8, Int(keyboardWidth / keyWidth))
             let span = (whiteKeys * 12 + 6) / 7 + 1                // semitones covered
             let limit = max(0, (127 - span) / 12)
             let current = max(0, min(octave, limit))
-            HStack(spacing: 8) {
-                VStack(spacing: 6) {
-                    do {
-                        Button(action: collapse) {
-                            Image(systemName: "chevron.down").font(.footnote.weight(.semibold))
-                                .frame(width: arrowWidth - 12, height: 26)
+            let keys = KeyboardView(firstNote: current * 12, whiteKeyCount: whiteKeys, activeNotes: engine.status.heldNotes.union(engine.activeNotes),
+                                    onNoteOn: { engine.noteOn($0, velocity: $1) }, onNoteOff: { engine.noteOff($0) })
+            Group {
+                if landscapePhone {
+                    HStack(spacing: 8) {
+                        VStack(spacing: 6) {
+                            hideButton(width: arrowWidth)
+                            scrollButton("chevron.left", width: arrowWidth, label: "Lower octave", disabled: current <= 0) { octave = current - 1 }
                         }
-                        .buttonStyle(.bordered)
-                        .accessibilityLabel("Hide keyboard")
+                        if wheelsPosition != 2 { sideSliders }
+                        keys
+                        if wheelsPosition == 2 { sideSliders }
+                        scrollButton("chevron.right", width: arrowWidth, label: "Higher octave", disabled: current >= limit) { octave = current + 1 }
                     }
-                    scrollButton("chevron.left", width: arrowWidth, label: "Lower octave", disabled: current <= 0) { octave = current - 1 }
+                } else {
+                    VStack(spacing: 6) {
+                        sliderStrip(width: geo.size.width - 24, arrowWidth: arrowWidth)
+                        HStack(spacing: 8) {
+                            scrollButton("chevron.left", width: arrowWidth, label: "Lower octave", disabled: current <= 0) { octave = current - 1 }
+                            keys
+                            scrollButton("chevron.right", width: arrowWidth, label: "Higher octave", disabled: current >= limit) { octave = current + 1 }
+                        }
+                    }
                 }
-                HStack(spacing: 4) {
-                    Wheel(title: "Pitch bend", caption: "PITCH", value: Double(engine.pitchBendValue) / 16383, springsToCenter: true) {
-                        engine.setPitchBend(Int(($0 * 16383).rounded()))
-                    }
-                    Wheel(title: "Mod wheel", caption: "MOD", value: Double(engine.modWheelValue) / 127, springsToCenter: false) {
-                        engine.setModWheel(Int(($0 * 127).rounded()))
-                    }
-                }
-                .frame(width: 64)
-                KeyboardView(firstNote: current * 12, whiteKeyCount: whiteKeys, activeNotes: engine.status.heldNotes.union(engine.activeNotes),
-                             onNoteOn: { engine.noteOn($0, velocity: $1) }, onNoteOff: { engine.noteOff($0) })
-                scrollButton("chevron.right", width: arrowWidth, label: "Higher octave", disabled: current >= limit) { octave = current + 1 }
             }
             .padding(.horizontal, 12).padding(.vertical, landscapePhone ? 4 : 8)
             .onChange(of: limit, initial: true) { maxOctave = limit; octave = max(0, min(octave, limit)) }
         }
-        .frame(height: landscapePhone ? 112 : compact ? 150 : 210)
+        .frame(height: landscapePhone ? 112 : compact ? 176 : 236)
         .background(Color.black.opacity(0.35))
+    }
+
+    // MARK: Sliders
+
+    private func hideButton(width: CGFloat) -> some View {
+        Button(action: collapse) {
+            Image(systemName: "chevron.down").font(.footnote.weight(.semibold))
+                .frame(width: width - 12, height: 26)
+        }
+        .buttonStyle(KeyboardButtonStyle())
+        .accessibilityLabel("Hide keyboard")
+    }
+
+    private func pitch(width: CGFloat) -> some View {
+        HorizontalWheel(title: "Pitch bend", caption: "PITCH", value: Double(engine.pitchBendValue) / 16383, springsToCenter: true) {
+            engine.setPitchBend(Int(($0 * 16383).rounded()))
+        }
+        .frame(width: width)
+    }
+
+    private func mod(width: CGFloat) -> some View {
+        HorizontalWheel(title: "Mod wheel", caption: "MOD", value: Double(engine.modWheelValue) / 127, springsToCenter: false) {
+            engine.setModWheel(Int(($0 * 127).rounded()))
+        }
+        .frame(width: width)
+    }
+
+    /// The row above the keys: the hide button at the left, and one set of Pitch and Mod sliders that sits at the left, centre
+    /// or right. Drag the grip beside the sliders to move them; they snap to the nearest of the three places.
+    private func sliderStrip(width: CGFloat, arrowWidth: CGFloat) -> some View {
+        // A bordered button is wider than the frame given to its label (by its padding), so use the width it really takes.
+        let buttonWidth = arrowWidth + 12
+        let grip: CGFloat = 22, gap: CGFloat = 8
+        let sliderWidth = max(70, min(190, (width - buttonWidth - 3 * gap - grip - 2 * gap) / 2))
+        let setWidth = grip + 2 * gap + 2 * sliderWidth
+        // Line the set up with the keys below: the first position starts at the first key and the last ends at the last key.
+        let keysLeft = buttonWidth + 8, keysRight = width - buttonWidth - 8
+        let leftX = keysLeft
+        let rightX = max(leftX, keysRight - setWidth)
+        let centreX = max(leftX, keysLeft + (keysRight - keysLeft - setWidth) / 2)
+        let positions = [leftX, centreX, rightX]
+        let base = positions[max(0, min(2, wheelsPosition))]
+        return ZStack(alignment: .bottomLeading) {
+            hideButton(width: arrowWidth)
+            HStack(alignment: .bottom, spacing: gap) {
+                Image(systemName: "line.3.horizontal")
+                    .rotationEffect(.degrees(90))
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.55))
+                    .frame(width: grip, height: 34)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 4, coordinateSpace: .named("wheelStrip"))   // not the grip's own space, which moves with it
+                            .onChanged { dragOffset = max(leftX - base, min(rightX - base, $0.translation.width)) }
+                            .onEnded { g in
+                                let landed = base + max(leftX - base, min(rightX - base, g.translation.width))
+                                let nearest = positions.indices.min { abs(positions[$0] - landed) < abs(positions[$1] - landed) } ?? 0
+                                withAnimation(.snappy(duration: 0.2)) { wheelsPosition = nearest; dragOffset = 0 }
+                            }
+                    )
+                    .accessibilityLabel("Move the pitch and mod sliders")
+                    .accessibilityHint("Drag left, to the centre, or right")
+                pitch(width: sliderWidth)
+                mod(width: sliderWidth)
+            }
+            .offset(x: base + dragOffset)
+        }
+        .coordinateSpace(name: "wheelStrip")
+        .frame(height: 46, alignment: .bottom)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The vertical pair used beside the keys on landscape phones.
+    private var sideSliders: some View {
+        HStack(spacing: 4) {
+            Wheel(title: "Pitch bend", caption: "PITCH", value: Double(engine.pitchBendValue) / 16383, springsToCenter: true) {
+                engine.setPitchBend(Int(($0 * 16383).rounded()))
+            }
+            Wheel(title: "Mod wheel", caption: "MOD", value: Double(engine.modWheelValue) / 127, springsToCenter: false) {
+                engine.setModWheel(Int(($0 * 127).rounded()))
+            }
+        }
+        .frame(width: 64)
     }
 
     private func scrollButton(_ symbol: String, width: CGFloat, label: String, disabled: Bool, action: @escaping () -> Void) -> some View {
@@ -437,7 +553,7 @@ private struct KeyboardBar: View {
                 .frame(maxHeight: .infinity)
                 .contentShape(Rectangle())
         }
-        .buttonStyle(.bordered)
+        .buttonStyle(KeyboardButtonStyle())
         .disabled(disabled)
         .accessibilityLabel(label)
     }

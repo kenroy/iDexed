@@ -376,6 +376,12 @@ struct DexedSynth {
             case EvAftertouch: controllers.aftertouch_cc = e.a; controllers.refresh(); break;
             case EvPatch:
                 memcpy(data, e.patch, DEXED_PATCH_SIZE);
+                // A whole new voice (a program change) must not re-voice notes that are already dying away: with the
+                // new algorithm and levels the old tail comes back as a loud "ghost" note that nobody played. Held
+                // keys follow the new voice; released ones are cut off.
+                for (auto &v : voices) {
+                    if (v.live && !v.keydown) { v.live = false; v.sustained = false; v.pendingKeyup = false; }
+                }
                 refreshVoice = true;
                 break;
             case EvParam:
