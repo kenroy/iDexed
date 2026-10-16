@@ -42,9 +42,14 @@ struct ContentView: View {
             show: { tab = $0 })
     }
 
-    var body: some View {
+    // MARK: Building blocks
+
+    /// The header and the section picker. `narrow` forces the compact header for a pane that is much narrower than the screen.
+    private func headerBlock(narrow: Bool = false) -> some View {
         VStack(spacing: 0) {
-            HeaderView(importing: $importing, importKind: $importKind, editingName: $editingName, tab: $tab, landscapePhone: landscapePhone, exportBank: { exportingBank = SysExDocument(data: engine.exportBank()) },
+            HeaderView(importing: $importing, importKind: $importKind, editingName: $editingName, tab: $tab, landscapePhone: landscapePhone,
+                       forceCompact: narrow,
+                       exportBank: { exportingBank = SysExDocument(data: engine.exportBank()) },
                        exportVoice: { exportingVoice = SysExDocument(data: engine.exportVoice()) })
             if !landscapePhone {
                 Picker("Section", selection: $tab) {
@@ -54,28 +59,98 @@ struct ContentView: View {
                 .labelsHidden()
                 .padding(.horizontal, 16).padding(.bottom, 8)
             }
+        }
+    }
 
-            if tab == .bank {
-                // The Bank tab scrolls its own panels, so the current bank and the library can scroll independently.
-                BankView(showTab: $tab, library: library)
-                    .padding(.horizontal, 16).padding(.bottom, 12)
-            } else {
-                ScrollView {
-                    Group {
-                        switch tab {
-                        case .voice: VoiceView(selectedOperator: $selectedOperator)
-                        case .operators: OperatorsView(selectedOperator: $selectedOperator)
-                        case .bank: EmptyView()
-                        }
+    /// One section's content. The Bank tab scrolls its own panels, so the current bank and the library scroll independently.
+    @ViewBuilder
+    private func contentBlock(_ shown: Tab) -> some View {
+        if shown == .bank {
+            BankView(showTab: $tab, library: library)
+                .padding(.horizontal, 16).padding(.bottom, 12)
+        } else {
+            ScrollView {
+                Group {
+                    switch shown {
+                    case .voice: VoiceView(selectedOperator: $selectedOperator)
+                    case .operators: OperatorsView(selectedOperator: $selectedOperator)
+                    case .bank: EmptyView()
                     }
-                    .padding(.horizontal, 16).padding(.bottom, 12)
                 }
-                .scrollDismissesKeyboard(.interactively)
+                .padding(.horizontal, 16).padding(.bottom, 12)
             }
+            .scrollDismissesKeyboard(.interactively)
+        }
+    }
 
-            if !keyboardCollapsed {
-                KeyboardBar(octave: $octave, maxOctave: $maxOctave, landscapePhone: landscapePhone, collapse: { withAnimation { keyboardCollapsed = true } })
+    @ViewBuilder
+    private func keyboardBlock(fillsHeight: Bool = false, foldGap: ClosedRange<CGFloat>? = nil) -> some View {
+        if !keyboardCollapsed {
+            KeyboardBar(octave: $octave, maxOctave: $maxOctave, landscapePhone: landscapePhone, fillsHeight: fillsHeight, foldGap: foldGap,
+                        collapse: { withAnimation { keyboardCollapsed = true } })
+        }
+    }
+
+    /// The section shown beside the chosen one when a vertical fold gives two panes.
+    private func partner(of shown: Tab) -> Tab { shown == .voice ? .operators : .voice }
+
+    // MARK: Layouts
+
+    private var standardLayout: some View {
+        VStack(spacing: 0) {
+            headerBlock()
+            contentBlock(tab)
+            keyboardBlock()
+        }
+    }
+
+    /// Half folded like a laptop: the editor above the fold, the whole lower half given to the keyboard.
+    private func laptopLayout(_ fold: FoldDivision) -> some View {
+        VStack(spacing: 0) {
+            VStack(spacing: 0) {
+                headerBlock()
+                contentBlock(tab)
             }
+            .frame(height: fold.start)
+            .clipped()
+            Color.clear.frame(height: fold.thickness)
+            keyboardBlock(fillsHeight: true)
+        }
+    }
+
+    /// Half folded like a book: one section on each side of the fold, and a keyboard whose keys stop short of the crease.
+    private func bookLayout(_ fold: FoldDivision, width: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 0) {
+                VStack(spacing: 0) {
+                    headerBlock(narrow: true)
+                    contentBlock(tab)
+                }
+                .frame(width: fold.start)
+                .clipped()
+                Color.clear.frame(width: fold.thickness)
+                contentBlock(partner(of: tab))
+                    .frame(maxWidth: .infinity)
+                    .clipped()
+            }
+            keyboardBlock(foldGap: fold.start...fold.end)
+        }
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let fold = keyboardCollapsed ? nil : FoldGeometry.division(in: geo)
+            Group {
+                if let fold, fold.axis == .horizontal {
+                    laptopLayout(fold)
+                } else if let fold, fold.axis == .vertical, tab != .bank {
+                    bookLayout(fold, width: geo.size.width)
+                } else {
+                    standardLayout
+                }
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+            .overlay { FoldDebugOverlay(fold: FoldGeometry.division(in: geo)) }
         }
         .overlay {
             if keyboardCollapsed {
@@ -151,12 +226,14 @@ private struct HeaderView: View {
     @Binding var editingName: Bool
     @Binding var tab: Tab
     var landscapePhone: Bool
+    /// Use the compact header even on a wide screen, for a pane that is only part of it.
+    var forceCompact = false
     var exportBank: () -> Void
     var exportVoice: () -> Void
     @State private var nameDraft = ""
     @AppStorage("wheelsPosition") private var wheelsPosition = 0
 
-    private var compact: Bool { sizeClass == .compact }
+    private var compact: Bool { forceCompact || sizeClass == .compact }
 
     var body: some View {
         @Bindable var engine = engine
@@ -411,6 +488,10 @@ private struct KeyboardBar: View {
     @Binding var octave: Int
     @Binding var maxOctave: Int
     var landscapePhone = false
+    /// Fill the height the parent gives (half a folded display) instead of using the usual fixed height.
+    var fillsHeight = false
+    /// Where a vertical fold crosses the bar (x range, in the bar's own coordinates): the keys stop short of it.
+    var foldGap: ClosedRange<CGFloat>?
     var collapse: () -> Void = {}
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// Where the Pitch and Mod sliders sit above the keys: 0 left, 1 centre, 2 right. Drag the grip to move them.
@@ -426,11 +507,23 @@ private struct KeyboardBar: View {
             // the keys, since there is no height to spare for a strip above them.
             let sideWheels: CGFloat = landscapePhone ? 64 + 8 : 0
             let keyboardWidth = geo.size.width - 24 - 16 - 2 * arrowWidth - sideWheels
-            let whiteKeys = max(8, Int(keyboardWidth / keyWidth))
+            // A bordered button is wider than the frame given to its label, by its padding.
+            let buttonWidth = arrowWidth + 12
+            // Across a fold the keys come in two groups with the crease between them.
+            let split: FoldedKeys? = {
+                guard let gap = foldGap, !landscapePhone else { return nil }
+                let keysLeft = 12 + buttonWidth + 8, keysRight = geo.size.width - 12 - buttonWidth - 8
+                let leftWidth = gap.lowerBound - 4 - keysLeft, rightWidth = keysRight - (gap.upperBound + 4)
+                guard leftWidth > keyWidth * 3, rightWidth > keyWidth * 3 else { return nil }
+                return FoldedKeys(leftCount: Int(leftWidth / keyWidth), rightCount: Int(rightWidth / keyWidth),
+                                  leftWidth: leftWidth, rightWidth: rightWidth, spacer: max(0, gap.upperBound - gap.lowerBound - 8))
+            }()
+            let whiteKeys = split.map { $0.leftCount + $0.rightCount } ?? max(8, Int(keyboardWidth / keyWidth))
             let span = (whiteKeys * 12 + 6) / 7 + 1                // semitones covered
             let limit = max(0, (127 - span) / 12)
             let current = max(0, min(octave, limit))
-            let keys = KeyboardView(firstNote: current * 12, whiteKeyCount: whiteKeys, activeNotes: engine.status.heldNotes.union(engine.activeNotes),
+            let held = engine.status.heldNotes.union(engine.activeNotes)
+            let keys = KeyboardView(firstNote: current * 12, whiteKeyCount: split?.leftCount ?? whiteKeys, activeNotes: held,
                                     onNoteOn: { engine.noteOn($0, velocity: $1) }, onNoteOff: { engine.noteOff($0) })
             Group {
                 if landscapePhone {
@@ -446,10 +539,23 @@ private struct KeyboardBar: View {
                     }
                 } else {
                     VStack(spacing: 6) {
-                        sliderStrip(width: geo.size.width - 24, arrowWidth: arrowWidth)
+                        if let split {
+                            foldedSliderStrip(split, arrowWidth: arrowWidth, buttonWidth: buttonWidth)
+                        } else {
+                            sliderStrip(width: geo.size.width - 24, arrowWidth: arrowWidth)
+                        }
                         HStack(spacing: 8) {
                             scrollButton("chevron.left", width: arrowWidth, label: "Lower octave", disabled: current <= 0) { octave = current - 1 }
-                            keys
+                            if let split {
+                                keys.frame(width: split.leftWidth)
+                                Color.clear.frame(width: split.spacer)
+                                KeyboardView(firstNote: KeyboardMath.whiteKeyNote(from: current * 12, count: split.leftCount),
+                                             whiteKeyCount: split.rightCount, activeNotes: held,
+                                             onNoteOn: { engine.noteOn($0, velocity: $1) }, onNoteOff: { engine.noteOff($0) })
+                                    .frame(width: split.rightWidth)
+                            } else {
+                                keys
+                            }
                             scrollButton("chevron.right", width: arrowWidth, label: "Higher octave", disabled: current >= limit) { octave = current + 1 }
                         }
                     }
@@ -458,8 +564,28 @@ private struct KeyboardBar: View {
             .padding(.horizontal, 12).padding(.vertical, landscapePhone ? 4 : 8)
             .onChange(of: limit, initial: true) { maxOctave = limit; octave = max(0, min(octave, limit)) }
         }
-        .frame(height: landscapePhone ? 112 : compact ? 176 : 236)
+        .frame(height: fillsHeight ? nil : (landscapePhone ? 112 : compact ? 176 : 236))
+        .frame(maxHeight: fillsHeight ? .infinity : nil)
         .background(Color.black.opacity(0.35))
+    }
+
+    /// The measurements of a keyboard split by a vertical fold.
+    private struct FoldedKeys {
+        var leftCount: Int, rightCount: Int
+        var leftWidth: CGFloat, rightWidth: CGFloat
+        var spacer: CGFloat
+    }
+
+    /// With a fold: Pitch above the left keys, Mod above the right keys, one under each hand.
+    private func foldedSliderStrip(_ split: FoldedKeys, arrowWidth: CGFloat, buttonWidth: CGFloat) -> some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            hideButton(width: arrowWidth)
+            pitch(width: split.leftWidth)
+            Color.clear.frame(width: split.spacer)
+            mod(width: split.rightWidth)
+            Color.clear.frame(width: buttonWidth)
+        }
+        .frame(height: 46, alignment: .bottom)
     }
 
     // MARK: Sliders

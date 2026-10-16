@@ -992,6 +992,18 @@ import AudioToolbox
         }
     }
 
+    @Suite struct KeyboardMathTests {
+        @Test func aSecondGroupContinuesWhereTheFirstEnds() {
+            #expect(KeyboardMath.whiteKeyNote(from: 60, count: 0) == 60)
+            #expect(KeyboardMath.whiteKeyNote(from: 60, count: 1) == 62)      // C → D
+            #expect(KeyboardMath.whiteKeyNote(from: 60, count: 3) == 65)      // C D E, then F
+            #expect(KeyboardMath.whiteKeyNote(from: 60, count: 7) == 72)      // a whole octave later
+            #expect(KeyboardMath.whiteKeyNote(from: 60, count: 9) == 76)      // C D E F G A B C D, then E
+            #expect(KeyboardMath.whiteKeyNote(from: 65, count: 3) == 71)      // starting on F: F G A, then B
+            #expect(KeyboardMath.whiteKeyNote(from: 71, count: 1) == 72)      // B → C
+        }
+    }
+
     @Suite struct MTSESPTests {
         @Test func clientIsPresentOnMacAndNotConnectedWithoutAMaster() {
             let core = SynthCore(sampleRate: 48000)
