@@ -28,6 +28,11 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     /// The keyboard can collapse to a movable corner button so the editor gets the height.
     @AppStorage("keyboardCollapsed") private var keyboardCollapsed = false
+    /// iPhone Duo: show a bare stage view on the outer display while closed. `hingeClosed` follows the hinge; the Edit button
+    /// lets you into the full editor for as long as it stays closed.
+    @AppStorage("stageWhenClosed") private var stageWhenClosed = true
+    @State private var hingeClosed = false
+    @State private var editWhileClosed = false
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     private var landscapePhone: Bool { verticalSizeClass == .compact }
@@ -96,25 +101,42 @@ struct ContentView: View {
 
     // MARK: Layouts
 
-    private var standardLayout: some View {
+    /// The outer display of a closed iPhone Duo: the patch name with previous and next, the level and volume, the algorithm of
+    /// the selected sound, and a keyboard of the usual height. The editor is one tap away.
+    private var stageLayout: some View {
         VStack(spacing: 0) {
-            headerBlock()
-            contentBlock(tab)
+            HeaderView(importing: $importing, importKind: $importKind, editingName: $editingName, tab: $tab, landscapePhone: landscapePhone,
+                       forceCompact: true, onStage: true, openEditor: { editWhileClosed = true },
+                       exportBank: { exportingBank = SysExDocument(data: engine.exportBank()) },
+                       exportVoice: { exportingVoice = SysExDocument(data: engine.exportVoice()) })
+            Panel(title: "Algorithm \(engine.patch.algorithm + 1)") {
+                AlgorithmView(algorithm: engine.patch.algorithm, feedbackLevel: engine.patch.feedback,
+                              enabled: engine.operatorEnabled, selected: $selectedOperator)
+                    .frame(maxHeight: .infinity)
+            }
+            .padding(.horizontal, 16)
+            Button { editWhileClosed = true } label: { Label("Show editor", systemImage: "slider.horizontal.3") }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .tint(Theme.accent)
+                .padding(.vertical, 8)
             keyboardBlock()
         }
     }
 
-    /// Half folded like a laptop: the editor above the fold, the whole lower half given to the keyboard.
-    private func laptopLayout(_ fold: FoldDivision) -> some View {
+    private var standardLayout: some View {
         VStack(spacing: 0) {
-            VStack(spacing: 0) {
-                headerBlock()
-                contentBlock(tab)
+            headerBlock()
+            contentBlock(tab)
+            if closedEditing {
+                // In the same place as the stage view's Show editor button.
+                Button { editWhileClosed = false } label: { Label("Hide editor", systemImage: "chevron.up") }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .tint(Theme.accent)
+                    .padding(.vertical, 8)
             }
-            .frame(height: fold.start)
-            .clipped()
-            Color.clear.frame(height: fold.thickness)
-            keyboardBlock(fillsHeight: true)
+            keyboardBlock()
         }
     }
 
@@ -138,13 +160,24 @@ struct ContentView: View {
         }
     }
 
+    /// The editor is open on a closed iPhone Duo's outer display, so offer a way back to the stage view.
+    private var closedEditing: Bool {
+        !engine.isHostedPlugin && stageWhenClosed && editWhileClosed && !keyboardCollapsed && (hingeClosed || HingeObserver.fakeClosed)
+    }
+
+    private var showsStage: Bool {
+        !engine.isHostedPlugin && stageWhenClosed && !editWhileClosed && !keyboardCollapsed && (hingeClosed || HingeObserver.fakeClosed)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let fold = keyboardCollapsed ? nil : FoldGeometry.division(in: geo)
             Group {
-                if let fold, fold.axis == .horizontal {
-                    laptopLayout(fold)
+                if showsStage {
+                    stageLayout
                 } else if let fold, fold.axis == .vertical {
+                    // Bent like a book: a section on each side. Bent like a laptop (a horizontal fold) the editor stays one
+                    // scrolling area from the header down to the keyboard, as when flat.
                     bookLayout(fold, width: geo.size.width)
                 } else {
                     standardLayout
@@ -153,6 +186,8 @@ struct ContentView: View {
             .frame(width: geo.size.width, height: geo.size.height)
             .overlay { FoldDebugOverlay(fold: FoldGeometry.division(in: geo)) }
         }
+        .modifier(HingeObserver(closed: $hingeClosed))
+        .onChange(of: hingeClosed) { if !hingeClosed { editWhileClosed = false } }
         .overlay {
             if keyboardCollapsed {
                 FloatingKeyboardButton { withAnimation { keyboardCollapsed = false } }
@@ -163,6 +198,7 @@ struct ContentView: View {
         .onAppear {
             // A developer aid: open on a given section (set the iDexedStartTab default to Voice, Operators or Bank).
             if let name = UserDefaults.standard.string(forKey: "iDexedStartTab"), let start = Tab(rawValue: name) { tab = start }
+            if UserDefaults.standard.bool(forKey: "iDexedShowEditor") { editWhileClosed = true }      // likewise, to open past the stage view
             engine.start()
             let engine = engine, octave = $octave
             typist.noteOn = { engine.noteOn($0) }
@@ -231,9 +267,13 @@ private struct HeaderView: View {
     var landscapePhone: Bool
     /// Use the compact header even on a wide screen, for a pane that is only part of it.
     var forceCompact = false
+    /// The closed iPhone Duo's stage view is showing: choosing a section opens the editor on it.
+    var onStage = false
+    var openEditor: () -> Void = {}
     var exportBank: () -> Void
     var exportVoice: () -> Void
     @State private var nameDraft = ""
+    @AppStorage("stageWhenClosed") private var stageWhenClosed = true
     @AppStorage("wheelsPosition") private var wheelsPosition = 0
 
     private var compact: Bool { forceCompact || sizeClass == .compact }
@@ -253,6 +293,21 @@ private struct HeaderView: View {
                     .labelsHidden()
                     .fixedSize()                       // never squeeze or truncate the segment titles
                     .layoutPriority(2)
+                    .overlay {
+                        // On the stage view a tap on any segment, even the one already selected (which a segmented control
+                        // ignores), opens the editor on that section.
+                        if onStage {
+                            GeometryReader { geo in
+                                Color.clear.contentShape(Rectangle())
+                                    .gesture(SpatialTapGesture().onEnded { tap in
+                                        let count = Tab.allCases.count
+                                        let index = min(count - 1, max(0, Int(tap.location.x / max(1, geo.size.width) * CGFloat(count))))
+                                        tab = Tab.allCases[index]
+                                        openEditor()
+                                    })
+                            }
+                        }
+                    }
                     level(volume: $engine.masterVolume, tight: true)
                     menu
                 }
@@ -358,6 +413,11 @@ private struct HeaderView: View {
                 }
                 #endif
             }
+            #if os(iOS)
+            if !engine.isHostedPlugin {
+                Toggle("Stage View When Closed", systemImage: "rectangle.portrait.on.rectangle.portrait.angled", isOn: $stageWhenClosed)
+            }
+            #endif
             Picker("Pitch & Mod Sliders", systemImage: "slider.horizontal.below.rectangle", selection: $wheelsPosition) {
                 Text("On the Left").tag(0)
                 Text("In the Centre").tag(1)

@@ -63,3 +63,29 @@ struct FoldDebugOverlay: View {
         }
     }
 }
+
+/// Tells the app when an iPhone Duo is closed (so the outer display is in use). Does nothing on other devices and on the Mac.
+struct HingeObserver: ViewModifier {
+    @Binding var closed: Bool
+
+    func body(content: Content) -> some View {
+        #if os(iOS)
+        if #available(iOS 27.1, *) {
+            content.onHingeChange { _, new in closed = new.hinge?.status == .closed }
+        } else {
+            content
+        }
+        #else
+        content
+        #endif
+    }
+
+    /// For testing without closing the simulator: set the `iDexedFakeFold` default to `closed`.
+    static var fakeClosed: Bool {
+        #if os(iOS)
+        UserDefaults.standard.string(forKey: "iDexedFakeFold") == "closed"
+        #else
+        false
+        #endif
+    }
+}
