@@ -3,15 +3,31 @@ import DexedKit
 
 /// The Bank tab: the current bank (32 slots) next to the bank browser.
 struct BankView: View {
+    /// Which part to show: everything (laid out to the width available), or one half for a screen split by a fold.
+    enum Part { case all, currentBank, library }
+
     @Environment(SynthEngine.self) private var engine
     @Binding var showTab: Tab
     var library: BankLibrary
+    var part: Part = .all
 
     /// Widths at which the layout changes: three equal columns, then two, then one page-scrolling column.
     private let threeColumnWidth: CGFloat = 960
     private let twoColumnWidth: CGFloat = 800
 
     var body: some View {
+        switch part {
+        case .currentBank:
+            ScrollView { currentBank }
+        case .library:
+            // A fold pane is narrow, so the library shows one of its lists at a time.
+            ScrollView { LibraryPanel(library: library) }
+        case .all:
+            adaptive
+        }
+    }
+
+    private var adaptive: some View {
         GeometryReader { geo in
             if geo.size.width >= threeColumnWidth {
                 // Current bank | banks | voices: equal widths, each filling the height and scrolling on its own.

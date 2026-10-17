@@ -64,9 +64,9 @@ struct ContentView: View {
 
     /// One section's content. The Bank tab scrolls its own panels, so the current bank and the library scroll independently.
     @ViewBuilder
-    private func contentBlock(_ shown: Tab) -> some View {
+    private func contentBlock(_ shown: Tab, bankPart: BankView.Part = .all) -> some View {
         if shown == .bank {
-            BankView(showTab: $tab, library: library)
+            BankView(showTab: $tab, library: library, part: bankPart)
                 .padding(.horizontal, 16).padding(.bottom, 12)
         } else {
             ScrollView {
@@ -91,7 +91,7 @@ struct ContentView: View {
         }
     }
 
-    /// The section shown beside the chosen one when a vertical fold gives two panes.
+    /// The section shown beside the chosen one when a vertical fold gives two panes (the Bank tab splits itself instead).
     private func partner(of shown: Tab) -> Tab { shown == .voice ? .operators : .voice }
 
     // MARK: Layouts
@@ -124,12 +124,13 @@ struct ContentView: View {
             HStack(spacing: 0) {
                 VStack(spacing: 0) {
                     headerBlock(narrow: true)
-                    contentBlock(tab)
+                    contentBlock(tab, bankPart: .currentBank)
                 }
                 .frame(width: fold.start)
                 .clipped()
                 Color.clear.frame(width: fold.thickness)
-                contentBlock(partner(of: tab))
+                // The Bank tab puts the Current Bank on one side and the Library on the other.
+                contentBlock(tab == .bank ? .bank : partner(of: tab), bankPart: .library)
                     .frame(maxWidth: .infinity)
                     .clipped()
             }
@@ -143,7 +144,7 @@ struct ContentView: View {
             Group {
                 if let fold, fold.axis == .horizontal {
                     laptopLayout(fold)
-                } else if let fold, fold.axis == .vertical, tab != .bank {
+                } else if let fold, fold.axis == .vertical {
                     bookLayout(fold, width: geo.size.width)
                 } else {
                     standardLayout
@@ -160,6 +161,8 @@ struct ContentView: View {
         .background(Theme.background.ignoresSafeArea())
         .preferredColorScheme(.dark)
         .onAppear {
+            // A developer aid: open on a given section (set the iDexedStartTab default to Voice, Operators or Bank).
+            if let name = UserDefaults.standard.string(forKey: "iDexedStartTab"), let start = Tab(rawValue: name) { tab = start }
             engine.start()
             let engine = engine, octave = $octave
             typist.noteOn = { engine.noteOn($0) }
@@ -576,14 +579,14 @@ private struct KeyboardBar: View {
         var spacer: CGFloat
     }
 
-    /// With a fold: Pitch above the left keys, Mod above the right keys, one under each hand.
+    /// With a fold: Pitch above the left keys, Mod above the right keys, one under each hand, and a hide button at each end.
     private func foldedSliderStrip(_ split: FoldedKeys, arrowWidth: CGFloat, buttonWidth: CGFloat) -> some View {
         HStack(alignment: .bottom, spacing: 8) {
             hideButton(width: arrowWidth)
             pitch(width: split.leftWidth)
             Color.clear.frame(width: split.spacer)
             mod(width: split.rightWidth)
-            Color.clear.frame(width: buttonWidth)
+            hideButton(width: arrowWidth)          // a second hide button at the far end keeps the strip balanced
         }
         .frame(height: 46, alignment: .bottom)
     }
