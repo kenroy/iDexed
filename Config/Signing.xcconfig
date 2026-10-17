@@ -1,0 +1,12 @@
+// Code signing for the Mac app and its plug-in.
+//
+// Ad hoc ("-") by default, so the project builds from a fresh clone without a developer certificate.
+// To sign with your own certificate, create Config/Local.xcconfig (it is not committed) containing, for example:
+//
+//     CODE_SIGN_IDENTITY[sdk=macosx*] = Apple Development
+//     DEVELOPMENT_TEAM = YOURTEAMID
+//
+// Settings kept here, and not in the Xcode project, are not rewritten when the signing tab is opened in Xcode.
+CODE_SIGN_IDENTITY[sdk=macosx*] = -
+
+#include? "Local.xcconfig"

@@ -7,3 +7,6 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 *.xcworkspace/xcuserdata/
+
+# Per-developer signing overrides (see Config/Signing.xcconfig)
+Config/Local.xcconfig
