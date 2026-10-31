@@ -25,7 +25,7 @@ A native SwiftUI port of [Dexed](https://github.com/asb2m10/dexed), the open-sou
 on-screen keyboard with pitch/mod wheels, typing-keyboard and MIDI input, MIDI out (virtual source "iDexed") with
 optional local-sound mute, output filter, master tune, Scala `.scl`/`.kbm` microtuning, AUv3 plug-in (macOS, iOS, iPadOS).
 
-Also: MIDI CC mapping with MIDI learn and named profiles, hardware DX7 SysEx send/receive (voice, bank and live edits), a cartridge manager
+Also: MIDI CC mapping with MIDI learn and named profiles (exportable as files), a tuning viewer, hardware DX7 SysEx send/receive (voice, bank and live edits), a cartridge manager
 (browse the app's own Cartridges folder or any folder of banks, drag voices into the current bank, and send voices or banks to a DX7 from a right-click menu), MPE per-note pitch bend, and Mac shortcuts
 (⌃1–6 show an operator, ⌃⇧1–6 toggle it, ⌃G / ⌃P / ⌃L switch sections).
 

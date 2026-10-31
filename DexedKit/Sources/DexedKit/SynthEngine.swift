@@ -298,6 +298,34 @@ public final class SynthEngine {
         SynthEngine.saveProfiles(mappingProfiles, active: activeMappingProfile)
     }
 
+    /// A profile as the bytes of a file you can save, copy to another device and import there.
+    public func exportMappingProfile(_ name: String) -> Data? {
+        guard let mapping = mappingProfiles[name] else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        return try? encoder.encode(MIDIMappingFile(name: name, mapping: mapping))
+    }
+
+    /// Adds the profile in a file to the saved profiles, under its own name (or `suggestedName` if it has none), made unique if
+    /// that name is taken. The working mapping and the active profile are left as they are. Returns the name it was saved under.
+    @discardableResult
+    public func importMappingProfile(_ data: Data, suggestedName: String) throws -> String {
+        guard let file = try? JSONDecoder().decode(MIDIMappingFile.self, from: data), file.format == MIDIMappingFile.formatName else {
+            throw MIDIMappingFileError.notAMappingFile
+        }
+        guard file.version <= MIDIMappingFile.currentVersion else { throw MIDIMappingFileError.newerVersion }
+        let mapping = file.mapping.sanitized()
+        guard !mapping.isEmpty else { throw MIDIMappingFileError.nothingUsable }
+        var base = file.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty { base = suggestedName.trimmingCharacters(in: .whitespacesAndNewlines) }
+        if base.isEmpty { base = "Imported" }
+        var name = base, n = 2
+        while mappingProfiles[name] != nil { name = "\(base) \(n)"; n += 1 }
+        mappingProfiles[name] = mapping
+        SynthEngine.saveProfiles(mappingProfiles, active: activeMappingProfile)
+        return name
+    }
+
     private static func loadProfiles() -> [String: MIDIMapping] {
         guard let data = UserDefaults.standard.data(forKey: "midiMappingProfiles"),
               let saved = try? JSONDecoder().decode([String: MIDIMapping].self, from: data) else { return [:] }
@@ -347,6 +375,9 @@ public final class SynthEngine {
     private static func saveMapping(_ mapping: MIDIMapping) {
         if let data = try? JSONEncoder().encode(mapping) { UserDefaults.standard.set(data, forKey: "midiMapping") }
     }
+
+    /// A description of the tuning in use (the standard tuning when no scale is loaded), for the tuning viewer.
+    public var tuningInfo: TuningInfo { TuningInfo.parse(scl: currentSCL, kbm: currentKBM, name: tuningName) }
 
     /// Name of the active microtuning, or nil for standard 12-TET.
     public private(set) var tuningName: String?

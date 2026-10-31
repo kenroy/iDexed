@@ -1055,6 +1055,119 @@ import AudioToolbox
         }
     }
 
+    @Suite struct TuningInfoTests {
+        @Test func standardTuningIsDescribedWhenNoScaleIsLoaded() {
+            let info = TuningInfo.parse(scl: nil, kbm: nil, name: nil)
+            #expect(info.isStandard && info.noteCount == 12 && abs(info.periodCents - 1200) < 0.0001)
+            #expect(info.text.contains("Notes per period: 12"))
+        }
+
+        @Test func aScalaScaleIsReadWithCentsAndRatios() {
+            let scl = "! example.scl\n!\nA small test scale\n 4\n!\n 100.0\n 5/4\n 3\n 2/1 octave\n"
+            let info = TuningInfo.parse(scl: scl, kbm: nil, name: "example")
+            #expect(info.description == "A small test scale")
+            #expect(info.noteCount == 4)
+            #expect(abs(info.degrees[0].cents - 100) < 1e-9)
+            #expect(abs(info.degrees[1].cents - 386.3137) < 1e-3)                  // 5/4
+            #expect(abs(info.degrees[2].cents - 1901.955) < 1e-2)                  // a bare 3 is the ratio 3/1
+            #expect(abs(info.periodCents - 1200) < 1e-9)
+            #expect(info.text.contains("2/1") && info.text.contains("No keyboard mapping loaded"))
+        }
+
+        @Test func aKeyboardMappingIsReadWithItsReference() {
+            let kbm = "! map\n7\n0\n127\n60\n69\n432.0\n7\n0\n1\nx\n2\n3\n4\n5\n"
+            let info = TuningInfo.parse(scl: "x\n 1\n 2/1\n", kbm: kbm, name: "t")
+            let m = info.mapping
+            #expect(m?.size == 7 && m?.middleNote == 60 && m?.referenceNote == 69)
+            #expect(m?.referenceFrequency == 432.0)
+            #expect(m?.pattern == ["0", "1", "x", "2", "3", "4", "5"])
+            #expect(info.text.contains("432.0000 Hz"))
+        }
+
+        @Test func brokenFilesGiveSomethingReadableInsteadOfCrashing() {
+            let info = TuningInfo.parse(scl: "", kbm: "\u{0}\u{1}", name: nil)
+            #expect(info.noteCount == 0)
+            _ = info.text
+        }
+    }
+
+    @Suite(.serialized) struct MappingFileTests {
+        @MainActor func withCleanDefaults(_ body: () throws -> Void) rethrows {
+            let d = UserDefaults.standard
+            let keys = ["midiMapping", "midiMappingProfiles", "midiMappingProfileActive"]
+            let saved = keys.map { d.object(forKey: $0) }
+            keys.forEach(d.removeObject(forKey:))
+            defer { for (k, v) in zip(keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } } }
+            try body()
+        }
+
+        @Test @MainActor func aProfileSurvivesExportAndImportOnAnotherEngine() throws {
+            try withCleanDefaults {
+                let engine = SynthEngine()
+                engine.beginLearning(.cutoff); engine.handleController(channel: 1, cc: 20, value: 5)
+                engine.beginLearning(.voice(134)); engine.handleController(channel: 3, cc: 21, value: 5)
+                engine.saveMappingProfile(as: "Surface")
+                let data = try #require(engine.exportMappingProfile("Surface"))
+                #expect(engine.exportMappingProfile("Nope") == nil)
+
+                // Pretend it came from another device: a different engine with no profiles.
+                UserDefaults.standard.removeObject(forKey: "midiMappingProfiles")
+                let other = SynthEngine()
+                #expect(other.mappingProfileNames.isEmpty)
+                let name = try other.importMappingProfile(data, suggestedName: "file")
+                #expect(name == "Surface" && other.mappingProfileNames == ["Surface"])
+                #expect(other.loadMappingProfile("Surface"))
+                #expect(other.mappedController(for: .cutoff) == MIDIControllerKey(channel: 1, cc: 20))
+                #expect(other.mappedController(for: .voice(134)) == MIDIControllerKey(channel: 3, cc: 21))
+
+                // A second import of the same file does not replace the first.
+                #expect(try other.importMappingProfile(data, suggestedName: "file") == "Surface 2")
+                #expect(other.mappingProfileNames == ["Surface", "Surface 2"])
+            }
+        }
+
+        @Test @MainActor func importingNeverChangesTheWorkingMapping() throws {
+            try withCleanDefaults {
+                let engine = SynthEngine()
+                engine.beginLearning(.volume); engine.handleController(channel: 1, cc: 30, value: 5)
+                engine.saveMappingProfile(as: "A")
+                let data = try #require(engine.exportMappingProfile("A"))
+                engine.removeAllMappings()
+                try engine.importMappingProfile(data, suggestedName: "B")
+                #expect(engine.midiMapping.isEmpty)
+            }
+        }
+
+        @Test @MainActor func badOrHostileFilesAreRefusedOrCleaned() throws {
+            try withCleanDefaults {
+                let engine = SynthEngine()
+                #expect(throws: MIDIMappingFileError.notAMappingFile) { try engine.importMappingProfile(Data("hello".utf8), suggestedName: "x") }
+                #expect(throws: MIDIMappingFileError.notAMappingFile) { try engine.importMappingProfile(Data("{}".utf8), suggestedName: "x") }
+
+                var future = MIDIMappingFile(name: "F", mapping: MIDIMapping())
+                future.version = 99
+                #expect(throws: MIDIMappingFileError.newerVersion) { try engine.importMappingProfile(try JSONEncoder().encode(future), suggestedName: "x") }
+
+                // Reserved controller numbers, a bad channel and a made-up parameter are all dropped; the rest is kept.
+                var raw = MIDIMapping()
+                raw.assign(.cutoff, to: MIDIControllerKey(channel: 1, cc: 64))          // sustain: reserved
+                raw.assign(.resonance, to: MIDIControllerKey(channel: 99, cc: 22))     // no such channel
+                raw.assign(.voice(500), to: MIDIControllerKey(channel: 1, cc: 23))     // no such parameter
+                raw.assign(.volume, to: MIDIControllerKey(channel: 2, cc: 24))         // fine
+                let name = try engine.importMappingProfile(try JSONEncoder().encode(MIDIMappingFile(name: "Mixed", mapping: raw)), suggestedName: "x")
+                engine.loadMappingProfile(name)
+                #expect(engine.midiMapping.count == 1 && engine.mappedController(for: .volume) == MIDIControllerKey(channel: 2, cc: 24))
+
+                // Nothing usable at all is an error, not an empty profile.
+                var useless = MIDIMapping()
+                useless.assign(.cutoff, to: MIDIControllerKey(channel: 1, cc: 64))
+                #expect(throws: MIDIMappingFileError.nothingUsable) {
+                    try engine.importMappingProfile(try JSONEncoder().encode(MIDIMappingFile(name: "U", mapping: useless)), suggestedName: "x")
+                }
+            }
+        }
+    }
+
     @Suite struct KeyboardMathTests {
         @Test func aSecondGroupContinuesWhereTheFirstEnds() {
             #expect(KeyboardMath.whiteKeyNote(from: 60, count: 0) == 60)

@@ -2,7 +2,7 @@ import SwiftUI
 import UniformTypeIdentifiers
 import DexedKit
 
-enum ImportKind { case sysex, scale, mapping }
+enum ImportKind { case sysex, scale, mapping, profile }
 
 enum Tab: String, CaseIterable, Identifiable {
     case voice = "Voice", operators = "Operators", bank = "Bank"
@@ -22,6 +22,8 @@ struct ContentView: View {
     @State private var exportingBank: SysExDocument?
     @State private var exportingVoice: SysExDocument?
     @State private var errorMessage: String?
+    @State private var infoMessage: String?
+    @State private var exportingProfile: MappingProfileDocument?
     @State private var typist = ComputerKeyboard()
     @State private var library = BankLibrary()
     @State private var editingName = false
@@ -59,7 +61,10 @@ struct ContentView: View {
             HeaderView(importing: $importing, importKind: $importKind, editingName: $editingName, tab: $tab, landscapePhone: landscapePhone,
                        forceCompact: narrow,
                        exportBank: { exportingBank = SysExDocument(data: engine.exportBank()) },
-                       exportVoice: { exportingVoice = SysExDocument(data: engine.exportVoice()) })
+                       exportVoice: { exportingVoice = SysExDocument(data: engine.exportVoice()) },
+                       exportProfile: { name in
+                           if let data = engine.exportMappingProfile(name) { exportingProfile = MappingProfileDocument(name: name, data: data) }
+                       })
             if !landscapePhone {
                 Picker("Section", selection: $tab) {
                     ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
@@ -266,6 +271,9 @@ struct ContentView: View {
                     case .sysex:
                         try engine.importSysEx(data, name: name)
                         tab = .bank
+                    case .profile:
+                        let added = try engine.importMappingProfile(data, suggestedName: name)
+                        infoMessage = "Added the mapping profile “\(added)”. Load it from MIDI Mapping ▸ Profiles ▸ Load Profile."
                     case .scale, .mapping:
                         let text = String(decoding: data, as: UTF8.self)
                         if let message = importKind == .scale ? engine.loadTuning(scl: text, kbm: nil, name: name)
@@ -277,6 +285,12 @@ struct ContentView: View {
             case .failure(let error): errorMessage = error.localizedDescription
             }
         }
+        .fileExporter(isPresented: Binding(get: { exportingProfile != nil }, set: { if !$0 { exportingProfile = nil } }),
+                      document: exportingProfile, contentType: .mappingProfile,
+                      defaultFilename: exportingProfile?.name ?? "Profile") { _ in }
+        .alert("MIDI Mapping", isPresented: Binding(get: { infoMessage != nil }, set: { if !$0 { infoMessage = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: { Text(infoMessage ?? "") }
         .fileExporter(isPresented: Binding(get: { exportingBank != nil }, set: { if !$0 { exportingBank = nil } }),
                       document: exportingBank, contentType: .sysex, defaultFilename: "\(engine.bankName).syx") { _ in }
         .fileExporter(isPresented: Binding(get: { exportingVoice != nil }, set: { if !$0 { exportingVoice = nil } }),
@@ -305,6 +319,8 @@ private struct HeaderView: View {
     var openEditor: () -> Void = {}
     var exportBank: () -> Void
     var exportVoice: () -> Void
+    var exportProfile: (String) -> Void = { _ in }
+    @State private var showingTuning = false
     @State private var nameDraft = ""
     @State private var savingProfile = false
     @State private var profileDraft = ""
@@ -374,6 +390,7 @@ private struct HeaderView: View {
         } message: {
             Text("Up to 10 characters.")
         }
+        .sheet(isPresented: $showingTuning) { TuningInfoView(info: engine.tuningInfo) }
         .alert("Save Mapping Profile", isPresented: $savingProfile) {
             TextField("Profile name", text: $profileDraft)
                 .autocorrectionDisabled()
@@ -411,12 +428,19 @@ private struct HeaderView: View {
                         }
                     }
                 }
+                Menu("Export Profile", systemImage: "square.and.arrow.up") {
+                    ForEach(engine.mappingProfileNames, id: \.self) { name in
+                        Button(name) { exportProfile(name) }
+                    }
+                }
                 Menu("Delete Profile", systemImage: "trash") {
                     ForEach(engine.mappingProfileNames, id: \.self) { name in
                         Button(name, role: .destructive) { engine.deleteMappingProfile(name) }
                     }
                 }
             }
+            Divider()
+            Button("Import Profile…", systemImage: "square.and.arrow.down.on.square") { importKind = .profile; importing = true }
         }
     }
 
@@ -478,6 +502,7 @@ private struct HeaderView: View {
             }
             Menu("Tuning", systemImage: "tuningfork") {
                 if let name = engine.tuningName { Text("Active: \(name)") }
+                Button("Show Tuning…", systemImage: "list.bullet.rectangle") { showingTuning = true }
                 Button("Standard Tuning (12-TET)") { engine.resetTuning() }
                 Button("Load Scala Scale (.scl)…") { importKind = .scale; importing = true }
                 Button("Add Keyboard Mapping (.kbm)…") { importKind = .mapping; importing = true }
