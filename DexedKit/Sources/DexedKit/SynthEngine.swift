@@ -248,6 +248,68 @@ public final class SynthEngine {
         SynthEngine.saveMapping(midiMapping)
     }
 
+    // MARK: MIDI mapping profiles
+
+    /// Named sets of controller assignments, like Dexed's controller profiles. The mapping above is the working copy: loading
+    /// a profile copies it in, and learning or removing mappings then changes only the working copy until you save again.
+    public private(set) var mappingProfiles: [String: MIDIMapping] = SynthEngine.loadProfiles()
+    /// The profile last saved or loaded, if it still exists.
+    public private(set) var activeMappingProfile: String? = UserDefaults.standard.string(forKey: "midiMappingProfileActive")
+
+    /// Profile names, in alphabetical order.
+    public var mappingProfileNames: [String] {
+        mappingProfiles.keys.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+
+    /// True when the working mapping has changed since the active profile was saved or loaded.
+    public var activeProfileIsModified: Bool {
+        guard let name = activeMappingProfile, let saved = mappingProfiles[name] else { return false }
+        return saved != midiMapping
+    }
+
+    /// Saves the working mapping as a profile (replacing any profile with that name) and makes it the active one.
+    /// Returns false if the name is empty.
+    @discardableResult
+    public func saveMappingProfile(as name: String) -> Bool {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        mappingProfiles[trimmed] = midiMapping
+        activeMappingProfile = trimmed
+        SynthEngine.saveProfiles(mappingProfiles, active: trimmed)
+        return true
+    }
+
+    /// Replaces the working mapping with a saved profile.
+    @discardableResult
+    public func loadMappingProfile(_ name: String) -> Bool {
+        guard let profile = mappingProfiles[name] else { return false }
+        midiMapping = profile
+        learningControl = nil
+        activeMappingProfile = name
+        SynthEngine.saveMapping(midiMapping)
+        SynthEngine.saveProfiles(mappingProfiles, active: name)
+        return true
+    }
+
+    /// Deletes a profile. The working mapping is left as it is.
+    public func deleteMappingProfile(_ name: String) {
+        mappingProfiles[name] = nil
+        if activeMappingProfile == name { activeMappingProfile = nil }
+        SynthEngine.saveProfiles(mappingProfiles, active: activeMappingProfile)
+    }
+
+    private static func loadProfiles() -> [String: MIDIMapping] {
+        guard let data = UserDefaults.standard.data(forKey: "midiMappingProfiles"),
+              let saved = try? JSONDecoder().decode([String: MIDIMapping].self, from: data) else { return [:] }
+        return saved
+    }
+
+    private static func saveProfiles(_ profiles: [String: MIDIMapping], active: String?) {
+        if let data = try? JSONEncoder().encode(profiles) { UserDefaults.standard.set(data, forKey: "midiMappingProfiles") }
+        if let active { UserDefaults.standard.set(active, forKey: "midiMappingProfileActive") }
+        else { UserDefaults.standard.removeObject(forKey: "midiMappingProfileActive") }
+    }
+
     /// Handles one incoming controller change. Returns true if it was consumed (learned or applied).
     @discardableResult
     public func handleController(channel: Int, cc: Int, value: Int) -> Bool {

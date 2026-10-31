@@ -992,6 +992,69 @@ import AudioToolbox
         }
     }
 
+    @Suite(.serialized) struct MappingProfileTests {
+        @MainActor static func clean(_ body: () throws -> Void) rethrows {
+            let d = UserDefaults.standard
+            let keys = ["midiMapping", "midiMappingProfiles", "midiMappingProfileActive"]
+            let saved = keys.map { d.object(forKey: $0) }
+            keys.forEach(d.removeObject(forKey:))
+            defer { for (k, v) in zip(keys, saved) { if let v { d.set(v, forKey: k) } else { d.removeObject(forKey: k) } } }
+            try body()
+        }
+
+        @Test @MainActor func profilesSaveLoadSwitchAndSurviveARestart() {
+            Self.clean {
+                let engine = SynthEngine()
+                #expect(engine.mappingProfileNames.isEmpty && engine.activeMappingProfile == nil)
+                #expect(!engine.saveMappingProfile(as: "   "), "an empty name is refused")
+
+                // A keyboard profile: CC 20 → Cutoff, CC 21 → Resonance.
+                engine.beginLearning(.cutoff); engine.handleController(channel: 1, cc: 20, value: 10)
+                engine.beginLearning(.resonance); engine.handleController(channel: 1, cc: 21, value: 10)
+                #expect(engine.saveMappingProfile(as: " Keyboard "))
+                #expect(engine.mappingProfileNames == ["Keyboard"] && engine.activeMappingProfile == "Keyboard")
+                #expect(!engine.activeProfileIsModified)
+
+                // A control-surface profile on other numbers.
+                engine.removeAllMappings()
+                #expect(engine.activeProfileIsModified, "emptying the working mapping differs from the saved profile")
+                engine.beginLearning(.volume); engine.handleController(channel: 2, cc: 30, value: 10)
+                #expect(engine.saveMappingProfile(as: "Surface"))
+                #expect(engine.mappingProfileNames == ["Keyboard", "Surface"])
+
+                // Switching replaces the working mapping.
+                #expect(engine.loadMappingProfile("Keyboard"))
+                #expect(engine.mappedController(for: .cutoff) == MIDIControllerKey(channel: 1, cc: 20))
+                #expect(engine.mappedController(for: .volume) == nil)
+                #expect(engine.activeMappingProfile == "Keyboard" && !engine.activeProfileIsModified)
+
+                // Editing the working copy marks the profile as changed without touching the saved one.
+                engine.beginLearning(.masterTune); engine.handleController(channel: 1, cc: 22, value: 10)
+                #expect(engine.activeProfileIsModified)
+                engine.loadMappingProfile("Surface"); engine.loadMappingProfile("Keyboard")
+                #expect(engine.mappedController(for: .masterTune) == nil, "the unsaved change was not kept in the profile")
+
+                // A new engine (a restart) sees the profiles, the active one and the working mapping.
+                let again = SynthEngine()
+                #expect(again.mappingProfileNames == ["Keyboard", "Surface"])
+                #expect(again.activeMappingProfile == "Keyboard")
+                #expect(again.mappedController(for: .cutoff) == MIDIControllerKey(channel: 1, cc: 20))
+            }
+        }
+
+        @Test @MainActor func deletingAProfileKeepsTheWorkingMapping() {
+            Self.clean {
+                let engine = SynthEngine()
+                engine.beginLearning(.cutoff); engine.handleController(channel: 1, cc: 20, value: 10)
+                engine.saveMappingProfile(as: "A")
+                engine.deleteMappingProfile("A")
+                #expect(engine.mappingProfileNames.isEmpty && engine.activeMappingProfile == nil && !engine.activeProfileIsModified)
+                #expect(engine.mappedController(for: .cutoff) != nil)
+                #expect(!engine.loadMappingProfile("A"), "a deleted profile can't be loaded")
+            }
+        }
+    }
+
     @Suite struct KeyboardMathTests {
         @Test func aSecondGroupContinuesWhereTheFirstEnds() {
             #expect(KeyboardMath.whiteKeyNote(from: 60, count: 0) == 60)

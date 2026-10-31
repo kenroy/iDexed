@@ -306,6 +306,8 @@ private struct HeaderView: View {
     var exportBank: () -> Void
     var exportVoice: () -> Void
     @State private var nameDraft = ""
+    @State private var savingProfile = false
+    @State private var profileDraft = ""
     @AppStorage("stageWhenClosed") private var stageWhenClosed = true
     @AppStorage("wheelsPosition") private var wheelsPosition = 0
     @AppStorage("slidersBesideKeys") private var slidersBeside = true
@@ -371,6 +373,50 @@ private struct HeaderView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Up to 10 characters.")
+        }
+        .alert("Save Mapping Profile", isPresented: $savingProfile) {
+            TextField("Profile name", text: $profileDraft)
+                .autocorrectionDisabled()
+            Button("Save") { engine.saveMappingProfile(as: profileDraft) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Saves the current controller assignments under this name. An existing profile with the same name is replaced.")
+        }
+    }
+
+    /// Named sets of MIDI controller assignments: switch between, say, a keyboard and a control surface.
+    @ViewBuilder
+    private var profilesMenu: some View {
+        Menu("Profiles", systemImage: "square.stack") {
+            if let active = engine.activeMappingProfile {
+                Text("Active: \(active)\(engine.activeProfileIsModified ? " (changed)" : "")")
+            } else {
+                Text("No profile selected")
+            }
+            if let active = engine.activeMappingProfile {
+                Button("Save “\(active)”", systemImage: "square.and.arrow.down") { engine.saveMappingProfile(as: active) }
+                    .disabled(!engine.activeProfileIsModified)
+            }
+            Button("Save Profile As…", systemImage: "plus") {
+                profileDraft = engine.activeMappingProfile ?? ""
+                savingProfile = true
+            }
+            .disabled(engine.midiMapping.isEmpty)
+            if !engine.mappingProfileNames.isEmpty {
+                Divider()
+                Menu("Load Profile", systemImage: "tray.and.arrow.down") {
+                    ForEach(engine.mappingProfileNames, id: \.self) { name in
+                        Button { engine.loadMappingProfile(name) } label: {
+                            if name == engine.activeMappingProfile { Label(name, systemImage: "checkmark") } else { Text(name) }
+                        }
+                    }
+                }
+                Menu("Delete Profile", systemImage: "trash") {
+                    ForEach(engine.mappingProfileNames, id: \.self) { name in
+                        Button(name, role: .destructive) { engine.deleteMappingProfile(name) }
+                    }
+                }
+            }
         }
     }
 
@@ -476,6 +522,8 @@ private struct HeaderView: View {
                         engine.removeAllMappings()
                     }
                     .disabled(engine.midiMapping.isEmpty)
+                    Divider()
+                    profilesMenu
                 }
                 dx7Menu
                 Divider()
