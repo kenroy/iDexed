@@ -44,34 +44,59 @@ enum FoldGeometry {
     }
 }
 
-/// A developer aid: draws the fold region the system reports (set the `iDexedFoldDebug` default to true).
+/// A developer aid: draws the fold region and the camera and status regions the system reports, and the safe-area insets
+/// (set the `iDexedFoldDebug` default to true).
 struct FoldDebugOverlay: View {
     var fold: FoldDivision?
+    var proxy: GeometryProxy
+
+    private var occlusions: [CGRect] {
+        #if os(iOS)
+        if #available(iOS 27.1, *) {
+            return proxy.reservedRegions(kind: .occlusion, options: [.includeInactive]).map(\.frame)
+        }
+        #endif
+        return []
+    }
 
     var body: some View {
         if UserDefaults.standard.bool(forKey: "iDexedFoldDebug") {
+            let boxes = occlusions
             ZStack(alignment: .topLeading) {
                 if let fold {
                     Rectangle().fill(Color.red.opacity(0.35))
                         .frame(width: fold.frame.width, height: fold.frame.height)
                         .offset(x: fold.frame.minX, y: fold.frame.minY)
                 }
-                Text(fold.map { "fold \($0.axis) \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))×\(Int($0.frame.height))" } ?? "no fold")
-                    .font(.caption2.monospaced()).padding(4).background(.black.opacity(0.7)).foregroundStyle(.white)
+                ForEach(Array(boxes.enumerated()), id: \.offset) { _, f in
+                    Rectangle().stroke(Color.yellow, lineWidth: 2)
+                        .frame(width: f.width, height: f.height)
+                        .offset(x: f.minX, y: f.minY)
+                }
+                let i = proxy.safeAreaInsets
+                let text = "size \(Int(proxy.size.width))x\(Int(proxy.size.height)) insets l\(Int(i.leading)) t\(Int(i.top)) r\(Int(i.trailing)) b\(Int(i.bottom))\n"
+                    + (boxes.isEmpty ? "no occlusions" : boxes.map { "occl \(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" }.joined(separator: "\n"))
+                    + "\n" + (fold.map { "fold \($0.axis) \(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))x\(Int($0.frame.height))" } ?? "no fold")
+                Text(text).font(.caption2.monospaced()).padding(4).background(.black.opacity(0.75)).foregroundStyle(.white)
             }
             .allowsHitTesting(false)
         }
     }
 }
 
-/// Tells the app when an iPhone Duo is closed (so the outer display is in use). Does nothing on other devices and on the Mac.
+/// Tells the app about an iPhone Duo's hinge: whether the phone is closed (so the outer display is in use), and whether there is
+/// a hinge at all. Does nothing on other devices and on the Mac.
 struct HingeObserver: ViewModifier {
     @Binding var closed: Bool
+    @Binding var hasHinge: Bool
 
     func body(content: Content) -> some View {
         #if os(iOS)
         if #available(iOS 27.1, *) {
-            content.onHingeChange { _, new in closed = new.hinge?.status == .closed }
+            content.onHingeChange { _, new in
+                closed = new.hinge?.status == .closed
+                hasHinge = new.hinge != nil
+            }
         } else {
             content
         }

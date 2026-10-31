@@ -32,10 +32,14 @@ struct ContentView: View {
     /// lets you into the full editor for as long as it stays closed.
     @AppStorage("stageWhenClosed") private var stageWhenClosed = true
     @State private var hingeClosed = false
+    /// There is a hinge, so this is an iPhone Duo; its status column and camera leave empty space down the side of the display
+    /// below the icons, which the keyboard may use.
+    @State private var hasHinge = false
+    @State private var safeInsets = EdgeInsets()
     @State private var editWhileClosed = false
     #if os(iOS)
     @Environment(\.verticalSizeClass) private var verticalSizeClass
-    private var landscapePhone: Bool { verticalSizeClass == .compact }
+    private var landscapePhone: Bool { verticalSizeClass == .compact || UserDefaults.standard.bool(forKey: "iDexedForceLandscapePhone") }
     #else
     private var landscapePhone: Bool { false }
     #endif
@@ -91,8 +95,15 @@ struct ContentView: View {
     @ViewBuilder
     private func keyboardBlock(fillsHeight: Bool = false, foldGap: ClosedRange<CGFloat>? = nil) -> some View {
         if !keyboardCollapsed {
+            // On an iPhone Duo the status icons sit at the top of a column down the side, so the keyboard at the bottom can run
+            // right out to the edge of the display instead of stopping at the safe area.
+            // Held sideways, the camera sits in the bottom corner of that column, right where the keys would go, so only extend in
+            // portrait, where the camera is at the top of the column.
+            let extend = hasHinge && foldGap == nil && portraitShape
             KeyboardBar(octave: $octave, maxOctave: $maxOctave, landscapePhone: landscapePhone, fillsHeight: fillsHeight, foldGap: foldGap,
                         collapse: { withAnimation { keyboardCollapsed = true } })
+                .padding(.leading, extend ? -safeInsets.leading : 0)
+                .padding(.trailing, extend ? -safeInsets.trailing : 0)
         }
     }
 
@@ -165,6 +176,8 @@ struct ContentView: View {
         !engine.isHostedPlugin && stageWhenClosed && editWhileClosed && !keyboardCollapsed && (hingeClosed || HingeObserver.fakeClosed)
     }
 
+    @State private var portraitShape = true
+
     private var showsStage: Bool {
         !engine.isHostedPlugin && stageWhenClosed && !editWhileClosed && !keyboardCollapsed && (hingeClosed || HingeObserver.fakeClosed)
     }
@@ -184,9 +197,11 @@ struct ContentView: View {
                 }
             }
             .frame(width: geo.size.width, height: geo.size.height)
-            .overlay { FoldDebugOverlay(fold: FoldGeometry.division(in: geo)) }
+            .overlay { FoldDebugOverlay(fold: FoldGeometry.division(in: geo), proxy: geo) }
+            .onChange(of: geo.safeAreaInsets, initial: true) { safeInsets = geo.safeAreaInsets }
+            .onChange(of: geo.size, initial: true) { portraitShape = geo.size.height >= geo.size.width }
         }
-        .modifier(HingeObserver(closed: $hingeClosed))
+        .modifier(HingeObserver(closed: $hingeClosed, hasHinge: $hasHinge))
         .onChange(of: hingeClosed) { if !hingeClosed { editWhileClosed = false } }
         .overlay {
             if keyboardCollapsed {
@@ -275,6 +290,7 @@ private struct HeaderView: View {
     @State private var nameDraft = ""
     @AppStorage("stageWhenClosed") private var stageWhenClosed = true
     @AppStorage("wheelsPosition") private var wheelsPosition = 0
+    @AppStorage("slidersBesideKeys") private var slidersBeside = true
 
     private var compact: Bool { forceCompact || sizeClass == .compact }
 
@@ -418,6 +434,7 @@ private struct HeaderView: View {
                 Toggle("Stage View When Closed", systemImage: "rectangle.portrait.on.rectangle.portrait.angled", isOn: $stageWhenClosed)
             }
             #endif
+            Toggle("Sliders Beside Keys", systemImage: "slider.vertical.3", isOn: $slidersBeside)
             Picker("Pitch & Mod Sliders", systemImage: "slider.horizontal.below.rectangle", selection: $wheelsPosition) {
                 Text("On the Left").tag(0)
                 Text("In the Centre").tag(1)
@@ -559,7 +576,13 @@ private struct KeyboardBar: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     /// Where the Pitch and Mod sliders sit above the keys: 0 left, 1 centre, 2 right. Drag the grip to move them.
     @AppStorage("wheelsPosition") private var wheelsPosition = 0
+    /// Pitch and Mod as upright sliders to the left of the keys, with OCT − and OCT + beside the hide button, so the keys take
+    /// the whole width. Off: the sliders go in a strip above the keys and the arrows sit at either end.
+    @AppStorage("slidersBesideKeys") private var slidersBeside = true
     @State private var dragOffset: CGFloat = 0
+
+    /// The layout with the sliders beside the keys. A split (folded) keyboard keeps its own arrangement.
+    private var besideLayout: Bool { slidersBeside && foldGap == nil }
 
     var body: some View {
         let compact = sizeClass == .compact
@@ -569,7 +592,7 @@ private struct KeyboardBar: View {
             // Fixed comfortable key width; the window decides how many keys fit. Landscape phones keep the sliders beside
             // the keys, since there is no height to spare for a strip above them.
             let sideWheels: CGFloat = landscapePhone ? 64 + 8 : 0
-            let keyboardWidth = geo.size.width - 24 - 16 - 2 * arrowWidth - sideWheels
+            let keyboardWidth = besideLayout ? geo.size.width - 24 - 64 - 8 : geo.size.width - 24 - 16 - 2 * arrowWidth - sideWheels
             // A bordered button is wider than the frame given to its label, by its padding.
             let buttonWidth = arrowWidth + 12
             // Across a fold the keys come in two groups with the crease between them.
@@ -589,7 +612,20 @@ private struct KeyboardBar: View {
             let keys = KeyboardView(firstNote: current * 12, whiteKeyCount: split?.leftCount ?? whiteKeys, activeNotes: held,
                                     onNoteOn: { engine.noteOn($0, velocity: $1) }, onNoteOff: { engine.noteOff($0) })
             Group {
-                if landscapePhone {
+                if besideLayout {
+                    VStack(spacing: 6) {
+                        HStack(spacing: 8) {
+                            hideButton(width: arrowWidth)
+                            octaveButton("OCT −", label: "Lower octave", disabled: current <= 0) { octave = current - 1 }
+                            octaveButton("OCT +", label: "Higher octave", disabled: current >= limit) { octave = current + 1 }
+                            Spacer(minLength: 0)
+                        }
+                        HStack(spacing: 8) {
+                            sideSliders
+                            keys
+                        }
+                    }
+                } else if landscapePhone {
                     HStack(spacing: 8) {
                         VStack(spacing: 6) {
                             hideButton(width: arrowWidth)
@@ -627,7 +663,7 @@ private struct KeyboardBar: View {
             .padding(.horizontal, 12).padding(.vertical, landscapePhone ? 4 : 8)
             .onChange(of: limit, initial: true) { maxOctave = limit; octave = max(0, min(octave, limit)) }
         }
-        .frame(height: fillsHeight ? nil : (landscapePhone ? 112 : compact ? 176 : 236))
+        .frame(height: fillsHeight ? nil : (landscapePhone ? (besideLayout ? 140 : 112) : compact ? 176 : 236))
         .frame(maxHeight: fillsHeight ? .infinity : nil)
         .background(Color.black.opacity(0.35))
     }
@@ -732,6 +768,15 @@ private struct KeyboardBar: View {
             }
         }
         .frame(width: 64)
+    }
+
+    private func octaveButton(_ title: String, label: String, disabled: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.footnote.weight(.semibold)).frame(height: 26)
+        }
+        .buttonStyle(KeyboardButtonStyle())
+        .disabled(disabled)
+        .accessibilityLabel(label)
     }
 
     private func scrollButton(_ symbol: String, width: CGFloat, label: String, disabled: Bool, action: @escaping () -> Void) -> some View {
