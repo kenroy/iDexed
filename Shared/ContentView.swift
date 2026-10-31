@@ -92,14 +92,29 @@ struct ContentView: View {
         }
     }
 
+    // MARK: The side column of an iPhone Duo
+
+    /// Held sideways, the Duo keeps a column down one side. Its status icons are hidden then, and all that is in it is the camera,
+    /// in one corner: at the bottom when the column is on the right, at the top when it is on the left. Everything else in the
+    /// column is free, so layouts run out into it, apart from whatever would sit in the camera's corner.
+    private var landscapeDuo: Bool { hasHinge && !portraitShape }
+    private var columnOnTrailing: Bool { safeInsets.trailing >= safeInsets.leading }
+
+    /// Lets a block run out into the side column(s) of the safe area.
+    private func extendedIntoColumn<V: View>(_ view: V, when active: Bool = true, leading: Bool = true, trailing: Bool = true) -> some View {
+        view
+            .padding(.leading, active && leading ? -safeInsets.leading : 0)
+            .padding(.trailing, active && trailing ? -safeInsets.trailing : 0)
+    }
+
     @ViewBuilder
     private func keyboardBlock(fillsHeight: Bool = false, foldGap: ClosedRange<CGFloat>? = nil) -> some View {
         if !keyboardCollapsed {
             // On an iPhone Duo the status icons sit at the top of a column down the side, so the keyboard at the bottom can run
             // right out to the edge of the display instead of stopping at the safe area.
-            // Held sideways, the camera sits in the bottom corner of that column, right where the keys would go, so only extend in
-            // portrait, where the camera is at the top of the column.
-            let extend = hasHinge && foldGap == nil && portraitShape
+            // Held sideways with the column on the right, the camera sits in its bottom corner, right where the keys would go, so
+            // only extend in portrait (camera at the top of the column) or when the column is on the left (camera at its top).
+            let extend = hasHinge && foldGap == nil && (portraitShape || !columnOnTrailing)
             KeyboardBar(octave: $octave, maxOctave: $maxOctave, landscapePhone: landscapePhone, fillsHeight: fillsHeight, foldGap: foldGap,
                         collapse: { withAnimation { keyboardCollapsed = true } })
                 .padding(.leading, extend ? -safeInsets.leading : 0)
@@ -116,16 +131,18 @@ struct ContentView: View {
     /// the selected sound, and a keyboard of the usual height. The editor is one tap away.
     private var stageLayout: some View {
         VStack(spacing: 0) {
-            HeaderView(importing: $importing, importKind: $importKind, editingName: $editingName, tab: $tab, landscapePhone: landscapePhone,
-                       forceCompact: true, onStage: true, openEditor: { editWhileClosed = true },
-                       exportBank: { exportingBank = SysExDocument(data: engine.exportBank()) },
-                       exportVoice: { exportingVoice = SysExDocument(data: engine.exportVoice()) })
-            Panel(title: "Algorithm \(engine.patch.algorithm + 1)") {
+            extendedIntoColumn(HeaderView(importing: $importing, importKind: $importKind, editingName: $editingName, tab: $tab,
+                                          landscapePhone: landscapePhone, forceCompact: true, onStage: true,
+                                          openEditor: { editWhileClosed = true },
+                                          exportBank: { exportingBank = SysExDocument(data: engine.exportBank()) },
+                                          exportVoice: { exportingVoice = SysExDocument(data: engine.exportVoice()) }),
+                               when: landscapeDuo && columnOnTrailing)
+            extendedIntoColumn(Panel(title: "Algorithm \(engine.patch.algorithm + 1)") {
                 AlgorithmView(algorithm: engine.patch.algorithm, feedbackLevel: engine.patch.feedback,
                               enabled: engine.operatorEnabled, selected: $selectedOperator)
                     .frame(maxHeight: .infinity)
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 16), when: landscapeDuo)
             Button { editWhileClosed = true } label: { Label("Show editor", systemImage: "slider.horizontal.3") }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
@@ -137,8 +154,9 @@ struct ContentView: View {
 
     private var standardLayout: some View {
         VStack(spacing: 0) {
-            headerBlock()
-            contentBlock(tab)
+            // The header runs into the column unless the camera is in its top corner (column on the left).
+            extendedIntoColumn(headerBlock(), when: landscapeDuo && columnOnTrailing)
+            extendedIntoColumn(contentBlock(tab), when: landscapeDuo)
             if closedEditing {
                 // In the same place as the stage view's Show editor button.
                 Button { editWhileClosed = false } label: { Label("Hide editor", systemImage: "chevron.up") }
