@@ -335,12 +335,13 @@ import AudioToolbox
 
         @Test func scheduledChangesAreHandedOverInOrder() {
             let q = ScheduledParameterQueue()
-            q.push(address: 1000, value: 1); q.push(address: 1001, value: 2); q.push(address: 1000, value: 3)
-            var got: [(Int, Float)] = []
-            q.drain { got.append(($0, $1)) }
+            q.push(address: 1000, value: 1, applied: true); q.push(address: 1001, value: 2); q.push(address: 1000, value: 3, applied: true)
+            var got: [(Int, Float, Bool)] = []
+            q.drain { got.append(($0, $1, $2)) }
             #expect(got.map(\.0) == [1000, 1001, 1000] && got.map(\.1) == [1, 2, 3])
+            #expect(got.map(\.2) == [true, false, true], "whether the engine already has each value travels with it")
             var again = 0
-            q.drain { _, _ in again += 1 }
+            q.drain { _, _, _ in again += 1 }
             #expect(again == 0)
         }
 
@@ -1052,6 +1053,124 @@ import AudioToolbox
                 #expect(engine.mappedController(for: .cutoff) != nil)
                 #expect(!engine.loadMappingProfile("A"), "a deleted profile can't be loaded")
             }
+        }
+    }
+
+    @Suite(.serialized) struct PluginAutomationTests {
+        static func fourCC(_ s: String) -> FourCharCode { s.utf8.reduce(0) { ($0 << 8) | FourCharCode($1) } }
+
+        func makeUnit() throws -> DexedAudioUnit {
+            let desc = AudioComponentDescription(componentType: kAudioUnitType_MusicDevice, componentSubType: Self.fourCC("iDxd"),
+                                                 componentManufacturer: Self.fourCC("Kenr"), componentFlags: 0, componentFlagsMask: 0)
+            let au = try DexedAudioUnit(componentDescription: desc)
+            try au.allocateRenderResources()
+            return au
+        }
+
+        func address(_ identifier: String) -> Int { HostParameters.all.first { $0.identifier == identifier }!.address }
+
+        /// The host calls its automation observers from a background queue, so this must not belong to the main actor.
+        final class AutomationLog: @unchecked Sendable {
+            private let lock = NSLock()
+            private var stored: [(Int, AUParameterAutomationEventType, AUValue)] = []
+            func add(_ e: (Int, AUParameterAutomationEventType, AUValue)) { lock.lock(); stored.append(e); lock.unlock() }
+            var events: [(Int, AUParameterAutomationEventType, AUValue)] { lock.lock(); defer { lock.unlock() }; return stored }
+        }
+        nonisolated static func observer(log: AutomationLog, target: Int) -> AUParameterAutomationObserver {
+            { count, events in
+                for i in 0..<count where Int(events[i].address) == target { log.add((Int(events[i].address), events[i].eventType, events[i].value)) }
+            }
+        }
+
+        /// One block through the unit's real render block, with parameter events at the given sample offsets.
+        func render(_ au: DexedAudioUnit, frames: Int = 1024, events: [(offset: Int, address: Int, value: Float)] = []) -> [Float] {
+            let buffer = AVAudioPCMBuffer(pcmFormat: au.outputBusses[0].format, frameCapacity: AVAudioFrameCount(frames))!
+            buffer.frameLength = AVAudioFrameCount(frames)
+            let nodes = events.map { _ in UnsafeMutablePointer<AURenderEvent>.allocate(capacity: 1) }
+            defer { nodes.forEach { $0.deallocate() } }
+            for (i, e) in events.enumerated() {
+                nodes[i].initialize(to: AURenderEvent())
+                nodes[i].pointee.parameter.next = i + 1 < nodes.count ? nodes[i + 1] : nil
+                nodes[i].pointee.parameter.eventSampleTime = AUEventSampleTime(e.offset)
+                nodes[i].pointee.parameter.eventType = .parameter
+                nodes[i].pointee.parameter.parameterAddress = AUParameterAddress(e.address)
+                nodes[i].pointee.parameter.value = e.value
+            }
+            var flags = AudioUnitRenderActionFlags()
+            var ts = AudioTimeStamp()
+            ts.mSampleTime = 0
+            ts.mFlags = .sampleTimeValid
+            let status = au.internalRenderBlock(&flags, &ts, AUAudioFrameCount(frames), 0, buffer.mutableAudioBufferList,
+                                                nodes.first.map { UnsafePointer($0) }, nil)
+            #expect(status == noErr)
+            return Array(UnsafeBufferPointer(start: buffer.floatChannelData![0], count: frames))
+        }
+
+        func energy(_ x: ArraySlice<Float>) -> Float { x.reduce(0) { $0 + $1 * $1 } / Float(max(1, x.count)) }
+
+        @Test func aParameterChangeLandsOnTheExactSampleItWasScheduledFor() throws {
+            let level = address("op1_outputLevel")
+            func play() throws -> DexedAudioUnit {
+                let au = try makeUnit()
+                au.session.core.noteOn(60, velocity: 100)
+                return au
+            }
+            let plain = render(try play())
+            let changed = render(try play(), events: [(512, level, 0)])        // OP1 (the only audible operator) to level 0 at sample 512
+            #expect(plain[0..<512] == changed[0..<512], "nothing may change before the event")
+            #expect(plain[512..<1024] != changed[512..<1024], "the change has to be heard inside this block, not the next one")
+            #expect(energy(plain[800..<1024]) > 0.0001)
+            #expect(energy(changed[800..<1024]) < energy(plain[800..<1024]) * 0.5, "the sound dies away after the event")
+        }
+
+        @Test func eventsAtDifferentSamplesLandInOrder() throws {
+            let au = try makeUnit()
+            au.session.core.noteOn(60, velocity: 100)
+            let a = address("algorithm")
+            _ = render(au, events: [(100, a, 5), (700, a, 12)])
+            au.session.core.panic()
+        }
+
+        @Test func theSavedStateCatchesUpOnTheMainQueue() async throws {
+            let au = try makeUnit()
+            let level = address("op3_outputLevel"), cutoff = HostParameter.cutoff, mono = address("mono"), op2 = address("op2_switch")
+            _ = render(au, events: [(10, level, 42), (20, cutoff, 0.25), (30, mono, 1), (40, op2, 0)])
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(au.session.hostParameter(level) == 42)
+            #expect(abs(au.session.hostParameter(cutoff) - 0.25) < 1e-6)
+            #expect(au.session.hostParameter(mono) == 1)
+            #expect(au.session.hostParameter(op2) == 0)
+        }
+
+        @Test @MainActor func aKnobTurnedInTheEditorIsReportedToTheHostAsATouchValueAndRelease() async throws {
+            let au = try makeUnit()
+            let engine = SynthEngine(hosted: au.session)
+            let tree = try #require(au.parameterTree)
+            let target = address("algorithm")
+            let log = AutomationLog()
+            let token = tree.token(byAddingParameterAutomationObserver: Self.observer(log: log, target: target))
+            defer { tree.removeParameterObserver(token) }
+
+            engine.setParameter(134, 5)
+            engine.setParameter(134, 6)                       // a second turn within the same gesture
+            try await Task.sleep(for: .milliseconds(900))
+            let types = log.events.map(\.1)
+            #expect(types == [.touch, .value, .value, .release], "got \(types)")
+            #expect(log.events.last?.2 == 7)                  // algorithm 6 is stored as 6 and shown as 7
+            #expect(au.session.settings.patch[134] == 6, "the editor's change must not be undone by its own report")
+        }
+
+        @Test @MainActor func hostAutomationIsNotEchoedBackToTheHost() async throws {
+            let au = try makeUnit()
+            let engine = SynthEngine(hosted: au.session)
+            _ = engine
+            final class Count: @unchecked Sendable { var n = 0 }
+            let count = Count()
+            au.session.onEditorParameterChange = { _ in count.n += 1 }
+            _ = render(au, events: [(10, address("algorithm"), 9), (20, address("op1_switch"), 0), (30, HostParameter.volume, 0.5)])
+            au.session.setHostParameter(address("feedback"), 3)
+            try await Task.sleep(for: .milliseconds(400))
+            #expect(count.n == 0)
         }
     }
 

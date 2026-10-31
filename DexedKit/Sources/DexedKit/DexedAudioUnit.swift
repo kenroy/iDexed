@@ -21,6 +21,11 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
         outputBusArray = AUAudioUnitBusArray(audioUnit: self, busType: .output, busses: [bus])
         maximumFramesToRender = 1024
         buildParameterTree()
+        HostParameters.prepare()
+        session.onEditorParameterChange = { [weak self] address in
+            // The editor runs on the main thread already; this keeps that true for anything that calls it from elsewhere.
+            if Thread.isMainThread { self?.reportEditorChange(address) } else { DispatchQueue.main.async { self?.reportEditorChange(address) } }
+        }
     }
 
     public override var outputBusses: AUAudioUnitBusArray { outputBusArray }
@@ -61,11 +66,45 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
         _parameterTree = AUParameterTree.createTree(withChildren: children)
         let session = self.session
         _parameterTree.implementorValueObserver = { param, value in
+            // A change the editor is reporting to the host comes back through here; it is already in the saved state.
+            if Thread.current.threadDictionary[DexedAudioUnit.reportingKey] != nil { return }
             session.setHostParameter(Int(param.address), Double(value))
         }
         _parameterTree.implementorValueProvider = { param in
             AUValue(session.hostParameter(Int(param.address)))
         }
+    }
+
+    // MARK: Telling the host about changes made in the editor
+
+    /// Set on the thread while a change is being reported, so the parameter tree's own observer can tell it is not host automation.
+    static let reportingKey = "iDexedReportingEditorChange"
+    /// Parameters the editor is currently moving, each with the task that ends the gesture once it has been still for a moment.
+    private var gestures: [Int: DispatchWorkItem] = [:]
+    private static let gestureIdle = 0.4
+
+    /// The user changed a parameter in the editor. Tell the host with a touch, the new value, and (after the movement stops) a
+    /// release, which is what lets a DAW record it as automation. Main thread.
+    func reportEditorChange(_ address: Int) {
+        guard let parameter = _parameterTree.parameter(withAddress: AUParameterAddress(address)) else { return }
+        send(.touch, for: parameter, address: address, onlyIfNew: true)
+        send(.value, for: parameter, address: address)
+        gestures[address]?.cancel()
+        let finish = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.gestures[address] = nil
+            self.send(.release, for: parameter, address: address)
+        }
+        gestures[address] = finish
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.gestureIdle, execute: finish)
+    }
+
+    private func send(_ type: AUParameterAutomationEventType, for parameter: AUParameter, address: Int, onlyIfNew: Bool = false) {
+        if onlyIfNew, gestures[address] != nil { return }
+        let thread = Thread.current.threadDictionary
+        thread[Self.reportingKey] = true
+        defer { thread.removeObject(forKey: Self.reportingKey) }
+        parameter.setValue(AUValue(session.hostParameter(address)), originator: nil, atHostTime: mach_absolute_time(), eventType: type)
     }
 
     // MARK: Presets (the 32 voices of the loaded bank)
@@ -129,7 +168,7 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: .milliseconds(15))
         let queue = scheduledChanges, session = self.session
-        timer.setEventHandler { queue.drain { address, value in session.setHostParameter(address, Double(value)) } }
+        timer.setEventHandler { queue.drain { address, value, applied in session.setHostParameter(address, Double(value), applyToCore: !applied) } }
         timer.resume()
         drainTimer = timer
     }
@@ -191,9 +230,12 @@ public final class DexedAudioUnit: AUAudioUnit, @unchecked Sendable {
                         }
                     }
                 case .parameter, .parameterRamp:
-                    // A ramp is applied as a jump to its target value; both are queued, not applied here.
+                    // Render up to the event, then give the engine the value, so it changes at exactly that sample. The saved
+                    // state and the editor catch up from the main queue. A ramp is applied as a jump to its target value.
                     let p = e.pointee.parameter
-                    scheduled.push(address: Int(p.parameterAddress), value: p.value)
+                    renderUpTo(offset)
+                    let applied = HostParameters.applyOnAudioThread(address: Int(p.parameterAddress), value: p.value, to: core)
+                    scheduled.push(address: Int(p.parameterAddress), value: p.value, applied: applied)
                 default: break
                 }
                 event = UnsafePointer(e.pointee.head.next)
@@ -240,40 +282,44 @@ final class ScheduledParameterQueue: @unchecked Sendable {
     private let capacity = 2048
     private let addresses: UnsafeMutablePointer<Int>
     private let values: UnsafeMutablePointer<Float>
+    private let applied: UnsafeMutablePointer<Bool>
     private var count = 0
     private let lock: UnsafeMutablePointer<os_unfair_lock>
 
     init() {
         addresses = .allocate(capacity: capacity)
         values = .allocate(capacity: capacity)
+        applied = .allocate(capacity: capacity)
         lock = .allocate(capacity: 1)
         lock.initialize(to: os_unfair_lock())
     }
 
     deinit {
-        addresses.deallocate(); values.deallocate()
+        addresses.deallocate(); values.deallocate(); applied.deallocate()
         lock.deinitialize(count: 1); lock.deallocate()
     }
 
     /// Render thread.
-    func push(address: Int, value: Float) {
+    func push(address: Int, value: Float, applied wasApplied: Bool = false) {
         guard os_unfair_lock_trylock(lock) else { return }
         if count < capacity {
             addresses[count] = address
             values[count] = value
+            applied[count] = wasApplied
             count += 1
         }
         os_unfair_lock_unlock(lock)
     }
 
     /// Main thread: hands every queued change, oldest first, to `apply`.
-    func drain(_ apply: (Int, Float) -> Void) {
+    func drain(_ apply: (Int, Float, Bool) -> Void) {
         os_unfair_lock_lock(lock)
         let n = count
         let a = Array(UnsafeBufferPointer(start: addresses, count: n))
         let v = Array(UnsafeBufferPointer(start: values, count: n))
+        let f = Array(UnsafeBufferPointer(start: applied, count: n))
         count = 0
         os_unfair_lock_unlock(lock)
-        for i in 0..<n { apply(a[i], v[i]) }
+        for i in 0..<n { apply(a[i], v[i], f[i]) }
     }
 }

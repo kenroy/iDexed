@@ -25,6 +25,9 @@ public final class HostedSession: @unchecked Sendable {
     public let core: SynthCore
     /// Called on the main queue when the host (not the editor) changed something: presets, parameters, state restore.
     public var onExternalChange: (@Sendable () -> Void)?
+    /// Called on the main queue when the user changes a parameter in the editor, with its host address, so the host can record
+    /// it as automation.
+    public var onEditorParameterChange: (@Sendable (Int) -> Void)?
 
     private let lock = NSLock()
     private var _settings = HostedSettings()
@@ -71,14 +74,21 @@ public final class HostedSession: @unchecked Sendable {
         apply(s)
     }
 
-    /// Host automation of the exposed parameters.
-    public func setHostParameter(_ address: Int, _ value: Double) {
+    /// The editor changed a parameter: lets the plug-in report it to the host.
+    public func editorChanged(address: Int) {
+        guard let handler = onEditorParameterChange else { return }
+        handler(address)
+    }
+
+    /// Host automation of the exposed parameters. With `applyToCore: false` only the saved state (and the editor) is updated,
+    /// because the engine already got the value, at the right sample, on the audio thread.
+    public func setHostParameter(_ address: Int, _ value: Double, applyToCore: Bool = true) {
         var s = settings
         switch address {
-        case HostParameter.volume: s.volume = Float(value); core.setOutputGain(s.volume)
-        case HostParameter.cutoff: s.cutoff = value; core.setFilter(cutoff: value, resonance: s.resonance)
-        case HostParameter.resonance: s.resonance = value; core.setFilter(cutoff: s.cutoff, resonance: value)
-        case HostParameter.tune: s.tune = (value + 100) / 200; core.setMasterTune(s.tune)
+        case HostParameter.volume: s.volume = Float(value); if applyToCore { core.setOutputGain(s.volume) }
+        case HostParameter.cutoff: s.cutoff = value; if applyToCore { core.setFilter(cutoff: value, resonance: s.resonance) }
+        case HostParameter.resonance: s.resonance = value; if applyToCore { core.setFilter(cutoff: s.cutoff, resonance: value) }
+        case HostParameter.tune: s.tune = (value + 100) / 200; if applyToCore { core.setMasterTune(s.tune) }
         default:
             guard let spec = HostParameters.spec(for: address) else { return }
             let v = max(spec.min, min(spec.max, Int(value.rounded())))
@@ -87,15 +97,16 @@ public final class HostedSession: @unchecked Sendable {
                 let stored = v - spec.min
                 guard s.patch[offset] != stored else { return }
                 s.patch[offset] = stored
-                core.setParam(offset, stored)
+                if applyToCore { core.setParam(offset, stored) }
             case .engine:
                 guard let engine = EngineType(rawValue: v), engine != s.engine else { return }
                 s.engine = engine
-                core.setEngine(engine)
+                if applyToCore { core.setEngine(engine) }
             case .extra:
                 guard s.extra[address] != v else { return }
                 s.extra[address] = v
-                HostParameters.applyExtras(s.extra, to: core)
+                // Mono and the operator switches were applied on the audio thread; the rest are applied here from the full state.
+                if applyToCore || !HostParameters.appliesOnAudioThread(address) { HostParameters.applyExtras(s.extra, to: core) }
             }
         }
         lock.lock(); _settings = s; lock.unlock()

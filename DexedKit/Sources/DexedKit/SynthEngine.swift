@@ -18,10 +18,13 @@ public final class SynthEngine {
     private var isStarting = false
     private var isRecovering = false
 
-    public var engineType: EngineType = .markI { didSet { core.setEngine(engineType); syncToHost() } }
-    public var monoMode = false { didSet { core.setMono(monoMode); syncToHost() } }
-    public var operatorEnabled = [Bool](repeating: true, count: 6) { didSet { core.setOperatorMask(opMask); sendEditToDX7(offset: 155, value: opMask); syncToHost() } }
-    public var masterVolume: Float = 1.0 { didSet { audio?.mainMixerNode.outputVolume = masterVolume; syncToHost() } }
+    public var engineType: EngineType = .markI { didSet { core.setEngine(engineType); syncToHost(); touched(HostParameter.engine) } }
+    public var monoMode = false { didSet { core.setMono(monoMode); syncToHost(); touched(HostParameter.mono) } }
+    public var operatorEnabled = [Bool](repeating: true, count: 6) { didSet {
+        core.setOperatorMask(opMask); sendEditToDX7(offset: 155, value: opMask); syncToHost()
+        for i in 0..<min(6, operatorEnabled.count, oldValue.count) where operatorEnabled[i] != oldValue[i] { touched(HostParameter.operatorSwitch(i)) }
+    } }
+    public var masterVolume: Float = 1.0 { didSet { audio?.mainMixerNode.outputVolume = masterVolume; syncToHost(); touched(HostParameter.volume) } }
     /// Publish played notes as a virtual MIDI source ("iDexed") for other devices/apps.
     public var sendsMIDI: Bool = UserDefaults.standard.object(forKey: "sendsMIDI") as? Bool ?? true {
         didSet { UserDefaults.standard.set(sendsMIDI, forKey: "sendsMIDI"); if !sendsMIDI { midiOut.allNotesOff() } }
@@ -32,13 +35,13 @@ public final class SynthEngine {
     }
     /// Global tune (0…1, 0.5 = in tune; ±1 semitone) and the output low-pass filter (cutoff 1 = open).
     public var masterTune: Double = UserDefaults.standard.object(forKey: "masterTune") as? Double ?? 0.5 {
-        didSet { UserDefaults.standard.set(masterTune, forKey: "masterTune"); core.setMasterTune(masterTune); syncToHost() }
+        didSet { UserDefaults.standard.set(masterTune, forKey: "masterTune"); core.setMasterTune(masterTune); syncToHost(); touched(HostParameter.tune) }
     }
     public var filterCutoff: Double = UserDefaults.standard.object(forKey: "filterCutoff") as? Double ?? 1 {
-        didSet { UserDefaults.standard.set(filterCutoff, forKey: "filterCutoff"); core.setFilter(cutoff: filterCutoff, resonance: filterResonance); syncToHost() }
+        didSet { UserDefaults.standard.set(filterCutoff, forKey: "filterCutoff"); core.setFilter(cutoff: filterCutoff, resonance: filterResonance); syncToHost(); touched(HostParameter.cutoff) }
     }
     public var filterResonance: Double = UserDefaults.standard.object(forKey: "filterResonance") as? Double ?? 0 {
-        didSet { UserDefaults.standard.set(filterResonance, forKey: "filterResonance"); core.setFilter(cutoff: filterCutoff, resonance: filterResonance); syncToHost() }
+        didSet { UserDefaults.standard.set(filterResonance, forKey: "filterResonance"); core.setFilter(cutoff: filterCutoff, resonance: filterResonance); syncToHost(); touched(HostParameter.resonance) }
     }
 
     /// How each MIDI controller drives the sound (like Dexed's controller settings). Vibrato/tremolo depth is still limited
@@ -732,6 +735,14 @@ public final class SynthEngine {
         core.setParam(offset, patch[offset])
         sendEditToDX7(offset: offset, value: patch[offset])
         syncToHost()
+        touched(HostParameter.voiceBase + offset)
+    }
+
+    /// In a plug-in, tells the host a parameter was changed in the editor (so it can record automation). Not for changes that came
+    /// from the host itself.
+    private func touched(_ address: Int) {
+        guard let hosted, !applyingFromHost else { return }
+        hosted.editorChanged(address: address)
     }
 
     public func setPatchName(_ name: String) {

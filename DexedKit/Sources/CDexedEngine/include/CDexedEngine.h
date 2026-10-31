@@ -56,6 +56,11 @@ void dexed_panic(DexedSynth *s);
 void dexed_set_mono(DexedSynth *s, bool mono);
 void dexed_set_engine(DexedSynth *s, int engine);
 void dexed_set_op_mask(DexedSynth *s, int mask6bit);
+// One operator switch at a time (bit 0 is OP6 … bit 5 is OP1), and one filter control at a time: the plug-in's automation
+// changes them individually, from the audio thread.
+void dexed_set_op_switch(DexedSynth *s, int bit, bool on);
+void dexed_set_cutoff(DexedSynth *s, float cutoff);
+void dexed_set_resonance(DexedSynth *s, float resonance);
 void dexed_set_pitch_range(DexedSynth *s, int up, int down, int step);
 void dexed_set_mod(DexedSynth *s, int source, int range, bool pitch, bool amp, bool eg);
 // Master tune and output filter. `value` / `cutoff` / `resonance` are normalised 0…1 (tune 0.5 = in tune, cutoff 1 = open).

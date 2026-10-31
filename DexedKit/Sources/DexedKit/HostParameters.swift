@@ -135,6 +135,45 @@ public enum HostParameters {
     public static let defaultExtras: [Int: Int] = Dictionary(uniqueKeysWithValues:
         all.filter { if case .extra = $0.target { true } else { false } }.map { ($0.address, $0.defaultValue) })
 
+    /// Applies one automation value straight to the engine, for the audio thread: no locks and no allocation (the lookup table
+    /// is built before the first render). Returns false for the parameters that can't be applied on their own, which the session
+    /// applies later from the saved state instead (controller routing, portamento, pitch-bend range).
+    public static func applyOnAudioThread(address: Int, value: Float, to core: SynthCore) -> Bool {
+        switch address {
+        case HostParameter.volume: core.setOutputGain(value); return true
+        case HostParameter.cutoff: core.setCutoff(Double(value)); return true
+        case HostParameter.resonance: core.setResonance(Double(value)); return true
+        case HostParameter.tune: core.setMasterTune((Double(value) + 100) / 200); return true
+        default: break
+        }
+        guard let spec = byAddress[address] else { return false }
+        let v = max(spec.min, min(spec.max, Int(value.rounded())))
+        switch spec.target {
+        case .voice(let offset):
+            core.setParam(offset, v - spec.min)
+            return true
+        case .engine:
+            guard let engine = EngineType(rawValue: v) else { return false }
+            core.setEngine(engine)
+            return true
+        case .extra:
+            if address == HostParameter.mono { core.setMono(v != 0); return true }
+            for op in 0..<6 where address == HostParameter.operatorSwitch(op) {
+                core.setOperatorSwitch(op: op, enabled: v != 0)
+                return true
+            }
+            return false
+        }
+    }
+
+    /// Whether `applyOnAudioThread` handles this address by itself.
+    public static func appliesOnAudioThread(_ address: Int) -> Bool {
+        address == HostParameter.mono || (0..<6).contains { address == HostParameter.operatorSwitch($0) }
+    }
+
+    /// Builds the lookup table now, so the first automation event on the audio thread doesn't have to.
+    public static func prepare() { _ = byAddress.count }
+
     /// Pushes the extras (mono, operator switches, portamento, bend, controller routing…) into the engine.
     public static func applyExtras(_ extra: [Int: Int], to core: SynthCore) {
         func v(_ address: Int) -> Int { extra[address] ?? defaultExtras[address] ?? 0 }

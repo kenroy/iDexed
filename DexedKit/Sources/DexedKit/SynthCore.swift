@@ -95,6 +95,10 @@ public final class SynthCore: @unchecked Sendable {
     public func setMono(_ on: Bool) { dexed_set_mono(synth, on) }
     public func setEngine(_ e: EngineType) { dexed_set_engine(synth, Int32(e.rawValue)) }
     public func setOperatorMask(_ mask: Int) { dexed_set_op_mask(synth, Int32(mask)) }
+    /// Switches one operator on or off (`op` 0 = OP1 … 5 = OP6) without touching the others.
+    public func setOperatorSwitch(op: Int, enabled: Bool) { dexed_set_op_switch(synth, Int32(5 - op), enabled) }
+    public func setCutoff(_ value: Double) { dexed_set_cutoff(synth, Float(value)) }
+    public func setResonance(_ value: Double) { dexed_set_resonance(synth, Float(value)) }
     /// Master tune, normalised 0…1 (0.5 = in tune; the full range is ±1 semitone, as in Dexed).
     public func setMasterTune(_ value: Double) { dexed_set_master_tune(synth, Float(value)) }
     /// Output low-pass filter. `cutoff` 1 = open (bypassed); both are normalised 0…1.

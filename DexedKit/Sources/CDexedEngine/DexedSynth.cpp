@@ -38,7 +38,7 @@ constexpr int kMinNoteBlocks = 15;
 
 enum EventType : uint8_t {
     EvNoteOn, EvNoteOff, EvPitchBend, EvCC, EvAftertouch, EvPatch, EvParam, EvPanic,
-    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE, EvTransposeAsScale, EvMTS
+    EvMono, EvEngine, EvOpMask, EvPitchRange, EvMod, EvMasterTune, EvFilter, EvPortamento, EvNormalizeVelocity, EvChannelPitchBend, EvMPE, EvTransposeAsScale, EvMTS, EvOpSwitch, EvCutoff, EvResonance
 };
 
 struct Event {
@@ -417,6 +417,11 @@ struct DexedSynth {
                 break;
             }
             case EvFilter: fx.uiCutoff = e.f1; fx.uiReso = e.f2; break;
+            case EvCutoff: fx.uiCutoff = e.f1; break;
+            case EvResonance: fx.uiReso = e.f1; break;
+            case EvOpSwitch:
+                if (e.a >= 0 && e.a < 6) controllers.opSwitch[e.a] = e.b ? '1' : '0';
+                break;
             case EvPortamento:
                 controllers.portamento_cc = e.a;
                 controllers.portamento_enable_cc = e.a > 0;
@@ -582,6 +587,9 @@ void dexed_set_master_tune(DexedSynth *s, float v) {
 void dexed_set_portamento(DexedSynth *s, int time, bool glissando) { post(s, EvPortamento, time, glissando); }
 void dexed_set_output_gain(DexedSynth *s, float gain) { s->outputGain.store(gain, std::memory_order_relaxed); }
 void dexed_set_normalize_velocity(DexedSynth *s, bool on) { post(s, EvNormalizeVelocity, on); }
+void dexed_set_cutoff(DexedSynth *s, float cutoff) { Event e; e.type = EvCutoff; e.f1 = cutoff; s->push(e); }
+void dexed_set_resonance(DexedSynth *s, float resonance) { Event e; e.type = EvResonance; e.f1 = resonance; s->push(e); }
+void dexed_set_op_switch(DexedSynth *s, int bit, bool on) { post(s, EvOpSwitch, bit, on); }
 void dexed_set_filter(DexedSynth *s, float cutoff, float resonance) {
     Event e; e.type = EvFilter; e.f1 = cutoff; e.f2 = resonance; s->push(e);
 }
